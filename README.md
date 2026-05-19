@@ -19,7 +19,9 @@ Adjust Include/Library paths in `build.sh` if Homebrew lives somewhere other tha
 ./build.sh
 ```
 
-Produces the `snesfox` executable in the project directory.
+Produces the `snesfox` executable in the project directory. On macOS the script also applies an **ad hoc codesign** so some systems do not terminate the binary immediately (`zsh: killed`).
+
+If you still see **`zsh: killed`** after rebuilding, sign manually (`codesign --force -s - ./snesfox`), clear quarantine (`xattr -cr ./snesfox`), or check corporate antivirus / SIP logs. Always pass a **subcommand** (e.g. `./snesfox emu game.sfc`); `./snesfox` alone only prints usage and exits with code **1**.
 
 ## Usage
 
