@@ -3,24 +3,29 @@
 #include <stdexcept>
 
 namespace {
-constexpr int WINDOW_HEIGHT = 768;
+// Layout uses (2/3) × the original design so window dimensions are ÷1.5 (~3× framebuffer → ~2×).
+constexpr int scale23(int v) { return (v * 2 + 1) / 3; }
 
-// SNES frame: 256×224 scaled 3× → 768×672, centred vertically
-constexpr int GAME_SCALE  = 3;
-constexpr int GAME_DST_W  = 256 * GAME_SCALE;                    // 768
-constexpr int GAME_DST_H  = 224 * GAME_SCALE;                    // 672
+// Baseline window height keeps scaled SNES framebuffer centred with proportional inset (~32 px).
+constexpr int MIN_WINDOW_HEIGHT = scale23(768);
+
+constexpr int GAME_SCALE  = 2;
+constexpr int GAME_DST_W  = 256 * GAME_SCALE;                    // 512
+constexpr int GAME_DST_H  = 224 * GAME_SCALE;                    // 448
 constexpr int GAME_DST_X  = 0;
-constexpr int GAME_DST_Y  = (WINDOW_HEIGHT - GAME_DST_H) / 2;   // 48
+
+constexpr int FONT_PT = scale23(16); // rounded from previous 16px
 
 // Debug text panel to the right of the game frame
-constexpr int TEXT_PANEL_X         = GAME_DST_W + 4;             // 772
-constexpr int TEXT_PANEL_RIGHT_PAD = 12;
+constexpr int TEXT_PANEL_X         = GAME_DST_W + scale23(4);
+constexpr int TEXT_PANEL_RIGHT_PAD = scale23(12);
 
 constexpr SDL_Color TEXT_COLOR{255, 255, 255, 255};
 constexpr SDL_Color BG_COLOR{0, 0, 0, 255};
-constexpr int LINE_HEIGHT = 18;
-constexpr int LEFT_MARGIN = 12;
-constexpr int TOP_MARGIN  = 12;
+constexpr int LINE_HEIGHT = scale23(18);
+constexpr int LEFT_MARGIN = scale23(12);
+constexpr int TOP_MARGIN  = scale23(12);
+constexpr int BOTTOM_PAD  = scale23(12);
 
 // Representative longest lines from main.cpp debug UI (disasm log, PPU dump, ROM header).
 int maxProbeLinePixels(TTF_Font* font) {
@@ -54,8 +59,8 @@ Display::Display(const std::string& title) {
         SDL_Quit();
         throw std::runtime_error(std::string("TTF_Init failed: ") + TTF_GetError());
     }
-    m_font = TTF_OpenFont("/System/Library/Fonts/Menlo.ttc", 16);
-    if (!m_font) m_font = TTF_OpenFont("/System/Library/Fonts/Supplemental/Courier New.ttf", 16);
+    m_font = TTF_OpenFont("/System/Library/Fonts/Menlo.ttc", FONT_PT);
+    if (!m_font) m_font = TTF_OpenFont("/System/Library/Fonts/Supplemental/Courier New.ttf", FONT_PT);
     if (!m_font) {
         TTF_Quit();
         SDL_Quit();
@@ -64,12 +69,13 @@ Display::Display(const std::string& title) {
 
     int probeW = maxProbeLinePixels(m_font);
     if (probeW <= 0) {
-        probeW = 560;
+        probeW = scale23(560);
     }
-    const int windowWidth = TEXT_PANEL_X + probeW + TEXT_PANEL_RIGHT_PAD;
+    m_windowWidth = TEXT_PANEL_X + probeW + TEXT_PANEL_RIGHT_PAD;
+    m_windowHeight = MIN_WINDOW_HEIGHT;
 
     m_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                windowWidth, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
+                                m_windowWidth, m_windowHeight, SDL_WINDOW_SHOWN);
     if (!m_window) {
         TTF_CloseFont(m_font);
         m_font = nullptr;
@@ -124,6 +130,20 @@ void Display::clear() {
     SDL_RenderClear(m_renderer);
 }
 
+void Display::applyPanelWindowHeight(std::size_t lineCount) {
+    const int textExtent = TOP_MARGIN + static_cast<int>(lineCount) * LINE_HEIGHT + BOTTOM_PAD;
+    const int requiredH = std::max(MIN_WINDOW_HEIGHT, textExtent);
+    if (requiredH != m_windowHeight) {
+        SDL_SetWindowSize(m_window, m_windowWidth, requiredH);
+        m_windowHeight = requiredH;
+    }
+}
+
+void Display::setFixedPanelLineCount(std::size_t lineCount) {
+    m_fixedPanelLineCount = lineCount;
+    applyPanelWindowHeight(lineCount);
+}
+
 void Display::renderLines(const std::vector<std::string>& lines, int xOffset) {
     int y = TOP_MARGIN;
     for (const auto& line : lines) {
@@ -136,17 +156,21 @@ void Display::renderLines(const std::vector<std::string>& lines, int xOffset) {
         SDL_DestroyTexture(texture);
         SDL_FreeSurface(surface);
         y += LINE_HEIGHT;
-        if (y > WINDOW_HEIGHT - LINE_HEIGHT) break;
     }
 }
 
 void Display::present(const std::vector<std::string>& lines) {
+    applyPanelWindowHeight(lines.size());
     renderLines(lines, LEFT_MARGIN);
     SDL_RenderPresent(m_renderer);
 }
 
 void Display::presentWithFrame(const uint32_t* pixels,
-                                const std::vector<std::string>& lines) {
+                               const std::vector<std::string>& lines) {
+    const std::size_t layoutLines =
+        m_fixedPanelLineCount > 0 ? m_fixedPanelLineCount : lines.size();
+    applyPanelWindowHeight(layoutLines);
+
     // Create streaming texture once
     if (!m_frameTex) {
         m_frameTex = SDL_CreateTexture(m_renderer,
@@ -163,7 +187,8 @@ void Display::presentWithFrame(const uint32_t* pixels,
 
     if (m_frameTex && pixels) {
         SDL_UpdateTexture(m_frameTex, nullptr, pixels, 256 * static_cast<int>(sizeof(uint32_t)));
-        const SDL_Rect dst{GAME_DST_X, GAME_DST_Y, GAME_DST_W, GAME_DST_H};
+        const int gameDstY = std::max(0, (m_windowHeight - GAME_DST_H) / 2);
+        const SDL_Rect dst{GAME_DST_X, gameDstY, GAME_DST_W, GAME_DST_H};
         SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
     }
 

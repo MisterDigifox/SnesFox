@@ -47,7 +47,21 @@ uint16_t sampleJoy1() {
     if (k[SDL_SCANCODE_W]) joy |= 0x0010; // R
     return joy;
 }
-constexpr int LOG_SIZE = 20;
+constexpr int LOG_SIZE = 4;
+
+// Total lines fed to Display in pause mode — must stay in sync with makeDebugLines(..., paused=true).
+inline std::size_t pausedEmuPanelLineCount(std::size_t romHeaderLines) {
+    constexpr std::size_t kTrailingPausedStructureLines =
+        15   // CPU Debug (=== CPU through Cycles)
+        + 2  // spacer + === PPU State ===
+        + 5  // VRam summary, SC/HOFS/VOFS/VMADDR, CHR@, TM@
+        + 5  // PAL0 header + 4 palette rows
+        + 2  // spacer + === Instruction Log ===
+        + static_cast<std::size_t>(LOG_SIZE);
+    constexpr std::size_t kSpacerAfterRomHeader = 1;
+    return romHeaderLines + kSpacerAfterRomHeader + kTrailingPausedStructureLines;
+}
+
 constexpr uint64_t DEFAULT_COV_FRAMES = 600;
 constexpr uint64_t COV_MAX_STEPS = 20000000ull;
 
@@ -499,6 +513,7 @@ int runEmu(const std::string& romPath) {
     bool stepOnce = false;
 
     Display display("snesfox");
+    display.setFixedPanelLineCount(pausedEmuPanelLineCount(headerLines.size()));
 
     bool running = true;
     while (running) {
