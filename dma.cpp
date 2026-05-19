@@ -67,6 +67,160 @@ void Dma::runChannel(int ch, Bus& bus) {
     c.byteCount = 0;
 }
 
+void Dma::stepA(Channel& c) {
+    if (c.ctrl & 0x08) return;
+    if (c.ctrl & 0x10) {
+        --c.srcAddr;
+    } else {
+        ++c.srcAddr;
+    }
+}
+
+void Dma::transferOneUnit(int ch, Bus& bus) {
+    Channel& c = m_ch[ch];
+    const bool toB   = !(c.ctrl & 0x80);
+    const bool fixed = (c.ctrl & 0x08);
+    const bool decr  = (c.ctrl & 0x10);
+    const uint8_t mode = c.ctrl & 0x07;
+    const uint8_t  unitSz  = kUnitSize[mode];
+    const uint8_t* offsets = kUnitOffsets[mode];
+
+    for (uint8_t i = 0; i < unitSz; ++i) {
+        const uint8_t bOff = offsets[i];
+        const uint16_t bAddr = static_cast<uint16_t>(0x2100 + c.bBus + bOff);
+
+        if (toB) {
+            const uint8_t val = bus.read(c.srcBank, c.srcAddr);
+            bus.write(0x00, bAddr, val);
+        } else {
+            const uint8_t val = bus.read(0x00, bAddr);
+            bus.write(c.srcBank, c.srcAddr, val);
+        }
+
+        if (!fixed) {
+            if (decr) {
+                --c.srcAddr;
+            } else {
+                ++c.srcAddr;
+            }
+        }
+    }
+}
+
+void Dma::transferOneUnitIndirect(int ch, Bus& bus) {
+    Channel& c = m_ch[ch];
+    const bool toB = !(c.ctrl & 0x80);
+    const uint8_t mode = c.ctrl & 0x07;
+    const uint8_t  unitSz  = kUnitSize[mode];
+    const uint8_t* offsets = kUnitOffsets[mode];
+
+    uint16_t ptr = m_hdmaIndirectPtr[ch];
+    const uint8_t bank = m_hdmaIndirectBank[ch];
+
+    for (uint8_t i = 0; i < unitSz; ++i) {
+        const uint16_t bAddr = static_cast<uint16_t>(0x2100 + c.bBus + offsets[i]);
+        if (toB) {
+            const uint8_t val = bus.read(bank, ptr++);
+            bus.write(0x00, bAddr, val);
+        } else {
+            const uint8_t val = bus.read(0x00, bAddr);
+            bus.write(bank, ptr++, val);
+        }
+    }
+    m_hdmaIndirectPtr[ch] = ptr;
+}
+
+void Dma::reset() {
+    for (int i = 0; i < 8; ++i) {
+        m_ch[i] = Channel{};
+        m_hdmaActive[i]      = false;
+        m_hdmaDoTransfer[i]  = false;
+        m_hdmaSnesRepeat[i]  = false;
+        m_hdmaLineCount[i]   = 0;
+    }
+    m_hdmaFrameEnable = 0;
+}
+
+bool Dma::hdmaReadLineCount(int ch, Bus& bus) {
+    Channel& c          = m_ch[ch];
+    const bool indirect = (c.ctrl & 0x40) != 0;
+
+    const uint8_t line = bus.read(c.srcBank, c.srcAddr);
+    stepA(c);
+
+    if (line == 0) {
+        // Terminator (snes9x also has indirect special case; treat as end for now)
+        return false;
+    }
+
+    if (line == 0x80) {
+        // One transfer, then 127 scanlines of idle (same as snes9x)
+        m_hdmaSnesRepeat[ch] = true;
+        m_hdmaLineCount[ch]  = 128;
+    } else {
+        m_hdmaSnesRepeat[ch] = !(line & 0x80);
+        m_hdmaLineCount[ch]  = line & 0x7F;
+    }
+
+    m_hdmaDoTransfer[ch] = true;
+
+    if (indirect) {
+        uint8_t lo = bus.read(c.srcBank, c.srcAddr);
+        stepA(c);
+        uint8_t hi = bus.read(c.srcBank, c.srcAddr);
+        stepA(c);
+        m_hdmaIndirectPtr[ch]  = static_cast<uint16_t>(lo | (static_cast<uint16_t>(hi) << 8));
+        m_hdmaIndirectBank[ch] = c.unused7;
+    }
+
+    return true;
+}
+
+void Dma::beginHdmaFrame(uint8_t enableMask, Bus& bus) {
+    m_hdmaFrameEnable = enableMask;
+    for (int ch = 0; ch < 8; ++ch) {
+        if (!(enableMask & (1 << ch))) {
+            m_hdmaActive[ch] = false;
+            continue;
+        }
+
+        m_ch[ch].srcAddr = m_ch[ch].tableBaseAddr;
+        m_ch[ch].srcBank = m_ch[ch].tableBaseBank;
+        m_hdmaActive[ch] = true;
+
+        if (!hdmaReadLineCount(ch, bus)) {
+            m_hdmaActive[ch] = false;
+        }
+    }
+}
+
+void Dma::runHdmaForScanline(int v, Bus& bus) {
+    (void)v;
+    for (int ch = 0; ch < 8; ++ch) {
+        if ((m_hdmaFrameEnable & (1 << ch)) == 0) continue;
+        if (!m_hdmaActive[ch]) continue;
+
+        const bool indirect = (m_ch[ch].ctrl & 0x40) != 0;
+
+        if (m_hdmaDoTransfer[ch]) {
+            if (indirect) {
+                transferOneUnitIndirect(ch, bus);
+            } else {
+                transferOneUnit(ch, bus);
+            }
+        }
+
+        // snes9x: p->DoTransfer = !p->Repeat;
+        m_hdmaDoTransfer[ch] = !m_hdmaSnesRepeat[ch];
+
+        if (--m_hdmaLineCount[ch] == 0) {
+            if (!hdmaReadLineCount(ch, bus)) {
+                m_hdmaActive[ch] = false;
+            }
+        }
+    }
+}
+
 uint8_t Dma::readReg(uint8_t ch, uint8_t reg) const {
     const Channel& c = m_ch[ch];
     switch (reg) {
@@ -93,5 +247,9 @@ void Dma::writeReg(uint8_t ch, uint8_t reg, uint8_t value) {
         case 5: c.byteCount = (c.byteCount & 0xFF00) | value; break;
         case 6: c.byteCount = (c.byteCount & 0x00FF) | (static_cast<uint16_t>(value) << 8); break;
         case 7: c.unused7   = value; break;
+    }
+    if (reg >= 2 && reg <= 4) {
+        c.tableBaseAddr = c.srcAddr;
+        c.tableBaseBank = c.srcBank;
     }
 }

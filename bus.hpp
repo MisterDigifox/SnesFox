@@ -14,6 +14,13 @@ class CPU;
 
 class Bus {
 public:
+    /// CPU-side cycles consumed per emulated scanline (must match `stepPeripherals` accumulator).
+    static constexpr uint64_t kCyclesPerScanline = 114;
+    /// Total scanlines before V counter wraps (matches internal `m_vCounter` ceiling).
+    static constexpr uint16_t kScanlinesPerFrame = 262;
+    /// One emulated TV frame — keep equal to `kCyclesPerScanline * kScanlinesPerFrame`.
+    static constexpr uint64_t kCyclesPerFrame = kCyclesPerScanline * kScanlinesPerFrame;
+
     explicit Bus(const std::vector<uint8_t>& rom, const std::string& savePath = "");
     ~Bus();
 
@@ -52,9 +59,9 @@ private:
     mutable bool m_nmiFlag = false;
     bool             m_vblankWaiPending = false;
 
-    // V/H counters
+    // V/H counters (start at last line so first emulated scan step wraps 261→0 like post-reset HW)
     uint16_t m_hCounter   = 0;
-    uint16_t m_vCounter   = 0;
+    uint16_t m_vCounter   = 261;
     uint64_t m_lastCycles = 0;
     uint64_t m_cycleAccum = 0;
     mutable bool m_hvcLatch = false;
@@ -84,8 +91,9 @@ private:
     // WRAM access ports ($2180-$2183)
     mutable uint32_t m_wramAddr = 0; // 17-bit address (0-0x1FFFF)
 
-    // DMA diagnostic
+    // DMA / HDMA ($420C write-only latch)
     uint8_t m_dmaTraceCount = 0;
+    uint8_t m_reg420c       = 0;
 
     bool isLoRomArea(uint8_t bank, uint16_t addr) const;
     uint32_t loRomToFileOffset(uint8_t bank, uint16_t addr) const;

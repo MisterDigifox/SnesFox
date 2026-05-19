@@ -42,70 +42,86 @@ void Bus::reset() {
     m_wramAddr = 0;
     m_apu.reset();
     m_ppu.reset();
+    m_dma.reset();
+    m_reg420c = 0;
     m_vblankWaiPending = false;
+    m_vCounter   = 261;
+    m_hCounter   = 0;
+    m_cycleAccum = 0;
+    m_lastCycles = 0;
 }
 
-static constexpr uint64_t CYCLES_PER_SCANLINE = 114; // ~30000 / 262
 static constexpr uint16_t H_TOTAL   = 340;
-static constexpr uint16_t V_TOTAL   = 262;
+static constexpr uint16_t V_TOTAL   = Bus::kScanlinesPerFrame;
 static constexpr uint16_t VBLANK_START = 225;
 
 bool Bus::stepPeripherals(uint64_t totalCycles) {
     const uint64_t delta = totalCycles - m_lastCycles;
     m_lastCycles = totalCycles;
 
-    const uint16_t prevV = m_vCounter;
-    const uint16_t prevH = m_hCounter;
+    const uint16_t prevHIn = m_hCounter;
 
     m_cycleAccum += delta;
-    while (m_cycleAccum >= CYCLES_PER_SCANLINE) {
-        m_cycleAccum -= CYCLES_PER_SCANLINE;
-        m_vCounter++;
+
+    bool nmiReturn = false;
+
+    while (m_cycleAccum >= Bus::kCyclesPerScanline) {
+        m_cycleAccum -= Bus::kCyclesPerScanline;
+
+        const uint16_t oldV = m_vCounter;
+
+        ++m_vCounter;
         if (m_vCounter >= V_TOTAL) {
             m_vCounter = 0;
             m_irqVMatch = false;
+            m_dma.beginHdmaFrame(m_reg420c, *this);
         }
-    }
-    m_hCounter = static_cast<uint16_t>((m_cycleAccum * H_TOTAL) / CYCLES_PER_SCANLINE);
 
-    // Render completed active scanline into PPU framebuffer
-    {
-        const bool newScanline = (m_vCounter != prevV);
-        if (newScanline && prevV < VBLANK_START) {
-            m_ppu.renderScanline(static_cast<int>(prevV));
+        // Draw the line we just finished first — it must use BG scroll from HDMA at the *start*
+        // of that line (written when we entered oldV). If we ran HDMA for m_vCounter before this,
+        // we would overwrite scroll with the next line's values and only one raster band would move.
+        if (oldV < VBLANK_START) {
+            m_ppu.renderScanline(static_cast<int>(oldV));
         }
-    }
 
-    // IRQ condition
-    if (m_irqMode != 0) {
-        const bool newScanline = (m_vCounter != prevV);
-        if (newScanline) {
+        m_dma.runHdmaForScanline(static_cast<int>(m_vCounter), *this);
+
+        if (m_irqMode != 0) {
             m_irqVMatch = (m_vCounter == m_vtime);
-            if (m_irqMode == 2 && m_irqVMatch) {   // V-only: fire at scanline start
-                m_irqFlag = true;
-                m_irqPending = true;
+            if (m_irqMode == 2 && m_irqVMatch) {
+                m_irqFlag     = true;
+                m_irqPending  = true;
             }
         }
-        const bool hEdge = (prevH < m_htime && m_hCounter >= m_htime);
-        if (hEdge) {
-            if (m_irqMode == 1)                     // H-only
-                { m_irqFlag = true; m_irqPending = true; }
-            if (m_irqMode == 3 && m_irqVMatch)     // H+V
-                { m_irqFlag = true; m_irqPending = true; }
+
+        if (oldV < VBLANK_START && m_vCounter >= VBLANK_START) {
+            m_nmiFlag = true;
+            m_vblankWaiPending = true;
+            if (m_nmiEnabled) {
+                nmiReturn = true;
+            }
         }
     }
 
-    // VBlank / NMI
-    const bool nowVBlank = (m_vCounter >= VBLANK_START);
-    const bool vBlankEdge = nowVBlank && !m_inVBlank;
-    m_inVBlank = nowVBlank;
+    m_hCounter = static_cast<uint16_t>((m_cycleAccum * H_TOTAL) / Bus::kCyclesPerScanline);
 
-    if (vBlankEdge) {
-        m_nmiFlag = true;
-        m_vblankWaiPending = true;
-        if (m_nmiEnabled) {
-            m_apu.step();
-            return true;
+    const bool nowVBlank = (m_vCounter >= VBLANK_START);
+    m_inVBlank           = nowVBlank;
+
+    if (nmiReturn) {
+        m_apu.step();
+        return true;
+    }
+
+    const bool hEdge = (prevHIn < m_htime && m_hCounter >= m_htime);
+    if (hEdge) {
+        if (m_irqMode == 1) {
+            m_irqFlag    = true;
+            m_irqPending = true;
+        }
+        if (m_irqMode == 3 && m_irqVMatch) {
+            m_irqFlag    = true;
+            m_irqPending = true;
         }
     }
 
@@ -382,6 +398,12 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     }
 
     // ------------------------------------------------------------
+    // HDMA channel enable ($420C): which channels use HDMA next frame (see beginHdmaFrame on V=0)
+    if (addr == 0x420C) {
+        m_reg420c = value;
+        return;
+    }
+
     // DMA trigger ($420B)
     // ------------------------------------------------------------
     if (addr == 0x420B) {

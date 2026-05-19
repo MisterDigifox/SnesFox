@@ -2,6 +2,8 @@
 
 Toolkit for SNES ROM exploration: lightweight CPU emulation with a debug UI, LoROM-oriented disassembler and round-trip reassembler, plus optional execution coverage.
 
+Emulation notes: general-purpose DMA (`$420B`) and per-scanline HDMA (`$420C`, direct and indirect table modes) are supported for PPU B-bus targets such as per-line scrolling. The CPU loop advances **`Bus::kCyclesPerFrame`** cycles per drawn frame (**262 × 114**), matching scanline stepping in `Bus::stepPeripherals` (older builds used `30000`, which drifted ~132 cycles/frame vs the raster).
+
 ## Dependencies (macOS)
 
 ```bash

@@ -22,7 +22,7 @@
 #include "reasm.hpp"
 
 namespace {
-constexpr uint64_t CYCLES_PER_FRAME = 30000;
+constexpr uint64_t CYCLES_PER_FRAME = Bus::kCyclesPerFrame;
 
 uint16_t sampleJoy1() {
     SDL_PumpEvents();
