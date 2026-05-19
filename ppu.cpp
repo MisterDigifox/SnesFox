@@ -1,6 +1,8 @@
 #include "ppu.hpp"
 #include <algorithm>
+#include <array>
 #include <cstdio>
+#include <cstring>
 
 // -----------------------------------------------------------------------
 // reset
@@ -64,8 +66,30 @@ uint16_t Ppu::vramStep() const {
     return steps[m_vmain & 0x03];
 }
 
+uint16_t Ppu::vramPhysicalAddr(uint16_t logical) const {
+    const uint16_t address = logical & 0x7FFFu;
+    switch ((m_vmain >> 2) & 3) {
+    case 0:
+        return address;
+    case 1:
+        return static_cast<uint16_t>(
+                   (address & 0xFF00u) | ((address << 3) & 0x00F8u) | ((address >> 5) & 7u))
+            & 0x7FFFu;
+    case 2:
+        return static_cast<uint16_t>(
+                   (address & 0xFE00u) | ((address << 3) & 0x01F8u) | ((address >> 6) & 7u))
+            & 0x7FFFu;
+    case 3:
+        return static_cast<uint16_t>(
+                   (address & 0xFC00u) | ((address << 3) & 0x03F8u) | ((address >> 7) & 7u))
+            & 0x7FFFu;
+    default:
+        return address;
+    }
+}
+
 void Ppu::vramPrefetch() const {
-    m_vramReadBuf = m_vram[m_vramAddr & 0x7FFF];
+    m_vramReadBuf = m_vram[vramPhysicalAddr(m_vramAddr)];
 }
 
 // -----------------------------------------------------------------------
@@ -177,7 +201,7 @@ void Ppu::writeReg(uint16_t addr, uint8_t value) {
 
     // --- $2118 VMDATAL: write low byte, increment if VMAIN.7=0 ---
     case 0x2118: {
-        const uint16_t a = m_vramAddr & 0x7FFF;
+        const uint16_t a = vramPhysicalAddr(m_vramAddr);
         m_vram[a] = (m_vram[a] & 0xFF00) | value;
         if ((m_vmain & 0x80) == 0) { m_vramAddr += vramStep(); ++m_vramWrites; }
         break;
@@ -185,7 +209,7 @@ void Ppu::writeReg(uint16_t addr, uint8_t value) {
 
     // --- $2119 VMDATAH: write high byte, increment if VMAIN.7=1 ---
     case 0x2119: {
-        const uint16_t a = m_vramAddr & 0x7FFF;
+        const uint16_t a = vramPhysicalAddr(m_vramAddr);
         m_vram[a] = (m_vram[a] & 0x00FF) | (static_cast<uint16_t>(value) << 8);
         if ((m_vmain & 0x80) != 0) { m_vramAddr += vramStep(); ++m_vramWrites; }
         break;
@@ -439,6 +463,109 @@ uint8_t Ppu::getPixel(int bpp, uint16_t base, uint16_t tileNum, int row, int col
     }
     default:
         return 0;
+    }
+}
+
+// 8-bit Mode 7 "direct colour" -> BGR555 (then same expansion as CGRAM).
+uint32_t Ppu::mode7DirectColorArgb(uint8_t pixel) const {
+    const unsigned r3 = pixel & 7u;
+    const unsigned g3 = (pixel >> 3) & 7u;
+    const unsigned b2 = (pixel >> 6) & 3u;
+    const uint16_t r5 = static_cast<uint16_t>((r3 << 2) | (r3 >> 1));
+    const uint16_t g5 = static_cast<uint16_t>((g3 << 2) | (g3 >> 1));
+    const uint16_t b5 = static_cast<uint16_t>((b2 << 3) | (b2 << 1) | (b2 >> 1));
+    const uint16_t bgr555 = static_cast<uint16_t>(b5 | (g5 << 5) | (r5 << 10));
+    return cgramToArgb(bgr555);
+}
+
+// -----------------------------------------------------------------------
+// renderMode7 — affine BG1 + EXTBG BG2 overlay (VRAM layout per SNES / bsnes fast mode7).
+// -----------------------------------------------------------------------
+void Ppu::renderMode7(int line, LayerPixel* affineOut, LayerPixel* extBgOut) const {
+    auto clipM7 = [](int n) -> int { return (n & 0x2000) ? (n | ~1023) : (n & 1023); };
+    auto extend13 = [](uint16_t raw) -> int {
+        int v = static_cast<int>(raw & 0x1FFFu);
+        if (v & 0x1000) {
+            v |= ~0x1FFF;
+        }
+        return v;
+    };
+
+    const int Y       = line;
+    const int yScreen = ((m_m7sel >> 1) & 1) ? (255 - Y) : Y;
+
+    const int hoffset = extend13(static_cast<uint16_t>(m_bgHOFS[0]));
+    const int voffset = extend13(static_cast<uint16_t>(m_bgVOFS[0]));
+    const int hcenter = extend13(static_cast<uint16_t>(m_m7x));
+    const int vcenter = extend13(static_cast<uint16_t>(m_m7y));
+
+    const int a = static_cast<int16_t>(m_m7a);
+    const int b = static_cast<int16_t>(m_m7b);
+    const int c = static_cast<int16_t>(m_m7c);
+    const int d = static_cast<int16_t>(m_m7d);
+
+    auto mulMasked = [&](int mat, int v) -> int {
+        const int64_t prod = static_cast<int64_t>(mat) * static_cast<int64_t>(v);
+        return static_cast<int>(prod & ~static_cast<int64_t>(63));
+    };
+
+    const int originX = mulMasked(a, clipM7(hoffset - hcenter)) + mulMasked(b, clipM7(voffset - vcenter))
+                      + mulMasked(b, yScreen) + (hcenter << 8);
+    const int originY = mulMasked(c, clipM7(hoffset - hcenter)) + mulMasked(d, clipM7(voffset - vcenter))
+                      + mulMasked(d, yScreen) + (vcenter << 8);
+
+    const unsigned repeatMode = (static_cast<unsigned>(m_m7sel) >> 6) & 3u;
+
+    const bool drawBg1 = (m_tm & 0x01) != 0;
+    const bool drawBg2 = (m_tm & 0x02) != 0;
+
+    for (int X = 0; X < 256; ++X) {
+        const int xWalk = ((m_m7sel & 1) == 0) ? X : (255 - X);
+
+        // origin / matrix values are SNES Mode 7 fixed-point: origin centered in pixel space shifted
+        // left by 8; each screen column advances by +(a,c) full fixed units (near/bsnes model).
+        // Do NOT shrink (a*xWalk) >> 8 before combining with origin or the row collapses (~constant X).
+        const int64_t lx64 = static_cast<int64_t>(originX) + static_cast<int64_t>(a) * static_cast<int64_t>(xWalk);
+        const int64_t ly64 = static_cast<int64_t>(originY) + static_cast<int64_t>(c) * static_cast<int64_t>(xWalk);
+
+        const int pixelX = static_cast<int>(lx64 >> 8);
+        const int pixelY = static_cast<int>(ly64 >> 8);
+
+        const bool outOfBounds = ((pixelX | pixelY) & ~1023) != 0;
+
+        const unsigned tileX = static_cast<unsigned>((pixelX >> 3) & 127);
+        const unsigned tileY = static_cast<unsigned>((pixelY >> 3) & 127);
+        const uint16_t mapAddr = static_cast<uint16_t>((tileY << 7) | tileX);
+        const uint16_t mapWord = m_vram[mapAddr & 0x7FFF];
+        uint8_t        tileNum = static_cast<uint8_t>(mapWord & 0xFF);
+        const unsigned inTile =
+            static_cast<unsigned>(((pixelY & 7) << 3) | (pixelX & 7)) & 63u;
+
+        if (repeatMode == 3u && outOfBounds) {
+            tileNum = 0;
+        }
+
+        const uint16_t chrAddr =
+            static_cast<uint16_t>((static_cast<uint16_t>(tileNum) << 6) | static_cast<uint16_t>(inTile));
+        const uint16_t chrWord = m_vram[chrAddr & 0x7FFF];
+        // Chunky palette is bits 15-8 at this VRAM word; bits 7-0 belong to tile-map semantics (SNES §Mode 7).
+        const uint8_t palHi   = static_cast<uint8_t>(chrWord >> 8);
+        uint8_t       palette = palHi;
+
+        if (repeatMode == 2u && outOfBounds) {
+            palette = 0;
+        }
+
+        if (drawBg1 && palette != 0) {
+            affineOut[X] = LayerPixel{palette, 0};
+        }
+        if (drawBg2) {
+            const unsigned priIdx = static_cast<unsigned>(palette) & 0x7Fu;
+            const uint8_t priBit  = static_cast<uint8_t>((palHi >> 7) & 1);
+            if (priIdx != 0) {
+                extBgOut[X] = LayerPixel{static_cast<uint8_t>(priIdx), priBit};
+            }
+        }
     }
 }
 
@@ -797,12 +924,28 @@ uint32_t Ppu::compositePixel(int x,
         trySpr(0);
         break;
 
+    case 7:
+        trySpr(3);
+        tryBg(0, 1);
+        tryBg(1, 1);
+        trySpr(2);
+        tryBg(0, 0);
+        tryBg(1, 0);
+        trySpr(1);
+        trySpr(0);
+        break;
+
     default:
         break;
     }
 
     // Resolve CGRAM color of winner
     uint32_t mainColor = cgramToArgb(m_cgram[winIdx]);
+
+    // Mode 7 direct colour bypasses CGRAM indexing for BG layers when $2130.bit0 is set.
+    if ((m_bgMode == 7) && ((m_cgswsel & 1) != 0) && found && (winCmBit == 0x04 || winCmBit == 0x08)) {
+        mainColor = mode7DirectColorArgb(winIdx);
+    }
 
     // GFX-07: Fixed-color math
     // Apply when: cgadsub enables this layer AND cgswsel says to apply
@@ -923,7 +1066,12 @@ void Ppu::renderScanline(int line) {
     case 6:
         if (m_tm & 0x01) renderBg(0, 4, line, bg0);
         break;
-    default:  // Mode 7 — not yet implemented, show backdrop
+    case 7:
+        if ((m_tm & 0x03) != 0) {
+            renderMode7(line, bg0, bg1);
+        }
+        break;
+    default:  // undefined bg modes — backdrop only
         for (int x = 0; x < 256; ++x) row[x] = applyInidispLuma(cgramToArgb(m_cgram[0]));
         return;
     }

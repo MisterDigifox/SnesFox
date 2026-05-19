@@ -154,6 +154,8 @@ private:
     // Helpers
     // -------------------------------------------------------
     uint16_t vramStep()             const;
+    // Map VRAM logical address (VMADD) to physical layout per $2115 increment mode (Bsnes-compatible).
+    uint16_t vramPhysicalAddr(uint16_t logical) const;
     void     vramPrefetch()         const;
     void     writeOam(uint8_t value);
     uint8_t  readOam()              const;
@@ -175,6 +177,10 @@ private:
     mutable bool m_objRangeOver = false; // set when >32 sprites on a scanline
     bool         m_diagDone     = false; // one-shot first-active-frame diagnostic
     uint32_t     m_vramWrites   = 0;    // total VRAM word writes (incremented per $2118/$2119 pair)
+
+    uint32_t mode7DirectColorArgb(uint8_t pixel) const;
+
+    void renderMode7(int line, LayerPixel* affineBg /* bg0 */, LayerPixel* extBg /* bg1 */) const;
 
     void     renderBg(int bg, int bpp, int line, LayerPixel* out) const;
     void     renderSprites(int line, SpritePixel* out) const;
