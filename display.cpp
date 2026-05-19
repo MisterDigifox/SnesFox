@@ -1,8 +1,8 @@
 #include "display.hpp"
+#include <algorithm>
 #include <stdexcept>
 
 namespace {
-constexpr int WINDOW_WIDTH  = 1024;
 constexpr int WINDOW_HEIGHT = 768;
 
 // SNES frame: 256×224 scaled 3× → 768×672, centred vertically
@@ -13,14 +13,37 @@ constexpr int GAME_DST_X  = 0;
 constexpr int GAME_DST_Y  = (WINDOW_HEIGHT - GAME_DST_H) / 2;   // 48
 
 // Debug text panel to the right of the game frame
-constexpr int TEXT_PANEL_X = GAME_DST_W + 4;                     // 772
-constexpr int TEXT_PANEL_Y = 12;
+constexpr int TEXT_PANEL_X         = GAME_DST_W + 4;             // 772
+constexpr int TEXT_PANEL_RIGHT_PAD = 12;
 
 constexpr SDL_Color TEXT_COLOR{255, 255, 255, 255};
 constexpr SDL_Color BG_COLOR{0, 0, 0, 255};
 constexpr int LINE_HEIGHT = 18;
 constexpr int LEFT_MARGIN = 12;
 constexpr int TOP_MARGIN  = 12;
+
+// Representative longest lines from main.cpp debug UI (disasm log, PPU dump, ROM header).
+int maxProbeLinePixels(TTF_Font* font) {
+    static const char* const kProbes[] = {
+        "> $FF:FFFF  FF FF FF    LDA [$FFFFFF],Y",
+        "> $FF:FFFF  FF FF FF    JSL $FFFFFF",
+        "CHR@FFFF: FFFF FFFF FFFF FFFF",
+        "[12]FFFF [13]FFFF [14]FFFF [15]FFFF ",
+        "Title      : AAAAAAAAAAAAAAAAAAAAA",
+        "Instruction  : LDA [$FFFFFF],Y",
+        "Map Mode   : HiROM / SRAM / EEPROM (0xff)",
+        "Special Chip  : Super FX GSU-1",
+    };
+    int maxPx = 0;
+    for (const char* p : kProbes) {
+        int w = 0;
+        int h = 0;
+        if (TTF_SizeUTF8(font, p, &w, &h) == 0) {
+            maxPx = std::max(maxPx, w);
+        }
+    }
+    return maxPx;
+}
 }
 
 Display::Display(const std::string& title) {
@@ -31,9 +54,25 @@ Display::Display(const std::string& title) {
         SDL_Quit();
         throw std::runtime_error(std::string("TTF_Init failed: ") + TTF_GetError());
     }
+    m_font = TTF_OpenFont("/System/Library/Fonts/Menlo.ttc", 16);
+    if (!m_font) m_font = TTF_OpenFont("/System/Library/Fonts/Supplemental/Courier New.ttf", 16);
+    if (!m_font) {
+        TTF_Quit();
+        SDL_Quit();
+        throw std::runtime_error(std::string("TTF_OpenFont failed: ") + TTF_GetError());
+    }
+
+    int probeW = maxProbeLinePixels(m_font);
+    if (probeW <= 0) {
+        probeW = 560;
+    }
+    const int windowWidth = TEXT_PANEL_X + probeW + TEXT_PANEL_RIGHT_PAD;
+
     m_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
+                                windowWidth, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
     if (!m_window) {
+        TTF_CloseFont(m_font);
+        m_font = nullptr;
         TTF_Quit();
         SDL_Quit();
         throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
@@ -42,18 +81,12 @@ Display::Display(const std::string& title) {
                                     SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!m_renderer) {
         SDL_DestroyWindow(m_window);
+        m_window = nullptr;
+        TTF_CloseFont(m_font);
+        m_font = nullptr;
         TTF_Quit();
         SDL_Quit();
         throw std::runtime_error(std::string("SDL_CreateRenderer failed: ") + SDL_GetError());
-    }
-    m_font = TTF_OpenFont("/System/Library/Fonts/Menlo.ttc", 16);
-    if (!m_font) m_font = TTF_OpenFont("/System/Library/Fonts/Supplemental/Courier New.ttf", 16);
-    if (!m_font) {
-        SDL_DestroyRenderer(m_renderer);
-        SDL_DestroyWindow(m_window);
-        TTF_Quit();
-        SDL_Quit();
-        throw std::runtime_error(std::string("TTF_OpenFont failed: ") + TTF_GetError());
     }
 }
 
