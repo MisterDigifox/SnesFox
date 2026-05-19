@@ -583,6 +583,10 @@ void Ppu::renderBg(int bg, int bpp, int line, LayerPixel* out) const {
 
     // CGRAM palette stride per bpp
     const int palStride = (bpp == 2) ? 4 : (bpp == 4) ? 16 : 256;
+    // Mode 0 — four 2bpp BGs partition CGRAM indices 0..127 into four 32-color banks
+    // (BG1 slots 0..31 … BG4 96..127); OBJ uses 128..255 ($2122 uploads).
+    const uint16_t mode0PalBase =
+        (m_bgMode == 0 && bpp == 2) ? static_cast<uint16_t>(bg * 32) : uint16_t(0);
 
     const int effY    = (line + static_cast<int>(vofs)) & 0x3FF;
     const int tileRow = effY / tileSz;                  // coarse tile row in tilemap
@@ -624,7 +628,7 @@ void Ppu::renderBg(int bg, int bpp, int line, LayerPixel* out) const {
         } else {
             const uint8_t idx = (bpp == 8)
                 ? color
-                : static_cast<uint8_t>(pal * palStride + color);
+                : static_cast<uint8_t>(mode0PalBase + static_cast<uint16_t>(pal * palStride + color));
             out[x] = { idx, pri ? uint8_t(1) : uint8_t(0) };
         }
     }
