@@ -38,7 +38,9 @@ void Ppu::reset() {
     m_m7sel = 0;
     m_m7a = 0; m_m7b = 0; m_m7c = 0; m_m7d = 0x0100;
     m_m7x = 0; m_m7y = 0;
-    m_m7latch = 0;
+    m_m7latch           = 0;
+    m_m7PendingMatAddr  = 0;
+    m_m7MatAwaitHigh    = false;
 
     m_cgramWordAddr = 0;
     m_cgramFlip     = false;
@@ -116,6 +118,33 @@ uint8_t Ppu::readOam() const {
     if (m_oamAddr < 544) val = m_oam[m_oamAddr];
     m_oamAddr = (m_oamAddr + 1) % 544;
     return val;
+}
+
+// -----------------------------------------------------------------------
+// writeMode7MatrixReg — $211B-$2120 matrix / center (hardware two-write latch).
+// First byte stores low; second completes int16 at the pending register port.
+// HDMA perspective demos issue pairs to $211B / $211E only — corrupting Mx on the
+// first byte breaks per-scanline scaling.
+// -----------------------------------------------------------------------
+void Ppu::writeMode7MatrixReg(uint16_t addr, uint8_t value) {
+    if (!m_m7MatAwaitHigh) {
+        m_m7latch          = value;
+        m_m7PendingMatAddr = addr;
+        m_m7MatAwaitHigh   = true;
+        return;
+    }
+    const uint16_t word = static_cast<uint16_t>(m_m7latch) | (static_cast<uint16_t>(value) << 8);
+    switch (m_m7PendingMatAddr) {
+    case 0x211B: m_m7a = static_cast<int16_t>(word); break;
+    case 0x211C: m_m7b = static_cast<int16_t>(word); break;
+    case 0x211D: m_m7c = static_cast<int16_t>(word); break;
+    case 0x211E: m_m7d = static_cast<int16_t>(word); break;
+    case 0x211F: m_m7x = static_cast<int16_t>(word); break;
+    case 0x2120: m_m7y = static_cast<int16_t>(word); break;
+    default: break;
+    }
+    m_m7latch        = value;
+    m_m7MatAwaitHigh = false;
 }
 
 // -----------------------------------------------------------------------
@@ -220,13 +249,15 @@ void Ppu::writeReg(uint16_t addr, uint8_t value) {
         m_m7sel = value;
         break;
 
-    // --- $211B-$2120 Mode 7 matrix + center (shared write latch) ---
-    case 0x211B: m_m7a = static_cast<int16_t>((value << 8) | m_m7latch); m_m7latch = value; break;
-    case 0x211C: m_m7b = static_cast<int16_t>((value << 8) | m_m7latch); m_m7latch = value; break;
-    case 0x211D: m_m7c = static_cast<int16_t>((value << 8) | m_m7latch); m_m7latch = value; break;
-    case 0x211E: m_m7d = static_cast<int16_t>((value << 8) | m_m7latch); m_m7latch = value; break;
-    case 0x211F: m_m7x = static_cast<int16_t>((value << 8) | m_m7latch); m_m7latch = value; break;
-    case 0x2120: m_m7y = static_cast<int16_t>((value << 8) | m_m7latch); m_m7latch = value; break;
+    // --- $211B-$2120 Mode 7 matrix + center (two-write latch per register port) ---
+    case 0x211B:
+    case 0x211C:
+    case 0x211D:
+    case 0x211E:
+    case 0x211F:
+    case 0x2120:
+        writeMode7MatrixReg(addr, value);
+        break;
 
     // --- $2121 CGADD: CGRAM word address (color index) ---
     case 0x2121:

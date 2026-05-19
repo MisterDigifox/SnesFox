@@ -116,7 +116,9 @@ private:
     uint8_t m_m7sel   = 0;
     int16_t m_m7a = 0, m_m7b = 0, m_m7c = 0, m_m7d = 0x0100;
     int16_t m_m7x = 0, m_m7y = 0;
-    uint8_t m_m7latch = 0;
+    uint8_t  m_m7latch           = 0;
+    uint16_t m_m7PendingMatAddr = 0; // register port ($211B..$2120) awaiting high byte
+    bool     m_m7MatAwaitHigh    = false;
 
     // -------------------------------------------------------
     // $2121 CGADD / $2122 CGDATA / $213B CGDATAREAD
@@ -159,6 +161,7 @@ private:
     void     vramPrefetch()         const;
     void     writeOam(uint8_t value);
     uint8_t  readOam()              const;
+    void     writeMode7MatrixReg(uint16_t addr, uint8_t value);
 
     // -------------------------------------------------------
     // Rendering helpers
