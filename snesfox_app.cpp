@@ -497,7 +497,7 @@ int runEmu(const std::string& romPath) {
     const bool isLoRom = (mapping == RomMapping::LoROM);
     const uint16_t resetVector = readResetVector(data, isLoRom);
 
-    printMissingOpcodes(OPCODES);
+    printMissingCpuOpcodes(cpuOpcodesTable);
 
     std::string savePath = romPath;
     const auto dot = savePath.rfind('.');

@@ -558,7 +558,7 @@ uint8_t operandSizeForMode(AddrMode mode, uint8_t p) {
     }
 }
 
-uint8_t instructionSize(const Op& op, uint8_t p) {
+uint8_t instructionSize(const CpuOpcode& op, uint8_t p) {
     return static_cast<uint8_t>(1 + operandSizeForMode(op.mode, p));
 }
 
@@ -710,7 +710,7 @@ void CPU::step(Bus& bus) {
     const uint8_t b2 = bus.read(m_bank, static_cast<uint16_t>(m_pc + 2));
     const uint8_t b3 = bus.read(m_bank, static_cast<uint16_t>(m_pc + 3));
 
-    const Op& op = OPCODES[m_opcode];
+    const CpuOpcode& op = cpuOpcodesTable[m_opcode];
 
     if (!op.valid) {
         m_bytes = raw8(b0);
@@ -3281,7 +3281,7 @@ void CPU::step(Bus& bus) {
         m_pc = static_cast<uint16_t>(m_pc + size);
     }
 
-    m_cycles += OPCODES[m_opcode].cyclesNumber;
+    m_cycles += cpuOpcodesTable[m_opcode].cyclesNumber;
 }
 
 void CPU::wakeFromWaiSilently() {

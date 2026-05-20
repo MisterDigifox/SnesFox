@@ -7,19 +7,19 @@
 
 namespace {
 
-Op makeUnknown() {
+CpuOpcode makeUnknown() {
     return {"???", 1, AddrMode::Unknown, false};
 }
 
-void setOp(std::array<Op, 256>& ops, uint8_t opcode, const char* name, uint8_t size, AddrMode mode, uint16_t cyclesNumber) {
+void setOp(std::array<CpuOpcode, 256>& ops, uint8_t opcode, const char* name, uint8_t size, AddrMode mode, uint16_t cyclesNumber) {
     if (ops[opcode].valid) {
         throw std::runtime_error("Duplicate opcode in table");
     }
     ops[opcode] = {name, size, mode, true, cyclesNumber};
 }
 
-std::array<Op, 256> buildOpcodeTable() {
-    std::array<Op, 256> ops{};
+std::array<CpuOpcode, 256> buildCpuOpcodeTable() {
+    std::array<CpuOpcode, 256> ops{};
     ops.fill(makeUnknown());
 
     setOp(ops, 0x00, "BRK", 2, AddrMode::Immediate8, 7);
@@ -299,7 +299,7 @@ std::array<Op, 256> buildOpcodeTable() {
 
 } // namespace
 
-void printMissingOpcodes(const std::array<Op, 256>& ops) {
+void printMissingCpuOpcodes(const std::array<CpuOpcode, 256>& ops) {
     int count = 0;
 
     std::cout << "=== Missing Opcodes ===\n";
@@ -322,4 +322,4 @@ void printMissingOpcodes(const std::array<Op, 256>& ops) {
     std::cout << "Total missing: " << std::dec << count << "\n";
 }
 
-const std::array<Op, 256> OPCODES = buildOpcodeTable();
+const std::array<CpuOpcode, 256> cpuOpcodesTable = buildCpuOpcodeTable();

@@ -35,7 +35,7 @@ enum class AddrMode : uint8_t {
     BlockMove
 };
 
-struct Op {
+struct CpuOpcode {
     const char* name;
     uint8_t size;
     AddrMode mode;
@@ -43,6 +43,6 @@ struct Op {
     uint16_t cyclesNumber;
 };
 
-extern const std::array<Op, 256> OPCODES;
+extern const std::array<CpuOpcode, 256> cpuOpcodesTable;
 
-void printMissingOpcodes(const std::array<Op, 256>& ops);
+void printMissingCpuOpcodes(const std::array<CpuOpcode, 256>& ops);

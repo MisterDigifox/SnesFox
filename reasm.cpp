@@ -109,7 +109,7 @@ uint32_t loRomToOffset(uint8_t bank, uint16_t addr) {
     return ((bank & 0x7F) << 15) | (addr - 0x8000);
 }
 
-uint8_t instrSize(const Op& op, uint8_t p) {
+uint8_t instrSize(const CpuOpcode& op, uint8_t p) {
     switch (op.mode) {
         case AddrMode::ImmediateM:
             return (p & 0x20) ? 2 : 3;
@@ -281,7 +281,7 @@ std::vector<uint8_t> findOpcodesByMnemonic(const std::string& mnemonic) {
     const std::string u = upper(mnemonic);
 
     for (int i = 0; i < 256; ++i) {
-        const auto& op = OPCODES[static_cast<size_t>(i)];
+        const auto& op = cpuOpcodesTable[static_cast<size_t>(i)];
         if (op.valid && u == op.name) {
             out.push_back(static_cast<uint8_t>(i));
         }
@@ -435,7 +435,7 @@ bool parseLine(const std::string& raw, int lineNo, ParsedLine& line, std::string
     return true;
 }
 
-const Op* chooseOpcode(const ParsedLine& line,
+const CpuOpcode* chooseOpcode(const ParsedLine& line,
                        uint8_t p,
                        const std::unordered_map<std::string, uint32_t>& labels,
                        std::string& error) {
@@ -446,7 +446,7 @@ const Op* chooseOpcode(const ParsedLine& line,
         return nullptr;
     }
 
-    std::vector<const Op*> matches;
+    std::vector<const CpuOpcode*> matches;
     const std::string operandCompact = removeSpaces(line.operand);
 
     // Returns true for any label name (known prefix or present in labels map)
@@ -508,7 +508,7 @@ const Op* chooseOpcode(const ParsedLine& line,
     }
 
     for (uint8_t opcode : candidates) {
-        const Op& op = OPCODES[opcode];
+        const CpuOpcode& op = cpuOpcodesTable[opcode];
 
         if (operandIsLabel && !operandLabelWithIndex) {
             if (isBranchMnemonic(line.mnemonic)) {
@@ -563,7 +563,7 @@ const Op* chooseOpcode(const ParsedLine& line,
         return nullptr;
     }
 
-    auto score = [&](const Op* op) {
+    auto score = [&](const CpuOpcode* op) {
         int s = 0;
 
         if (line.operand.empty() && op->mode == AddrMode::Implied) s += 10;
@@ -601,7 +601,7 @@ const Op* chooseOpcode(const ParsedLine& line,
     };
 
     return *std::max_element(matches.begin(), matches.end(),
-                             [&](const Op* a, const Op* b) {
+                             [&](const CpuOpcode* a, const CpuOpcode* b) {
                                  return score(a) < score(b);
                              });
 }
@@ -623,7 +623,7 @@ bool parseNumericOrLabel(const std::string& s,
 }
 
 bool encodeInstruction(const ParsedLine& line,
-                       const Op& op,
+                       const CpuOpcode& op,
                        uint8_t pBefore,
                        const std::unordered_map<std::string, uint32_t>& labels,
                        std::array<uint8_t, 4>& bytes,
@@ -633,7 +633,7 @@ bool encodeInstruction(const ParsedLine& line,
     bool found = false;
 
     for (int i = 0; i < 256; ++i) {
-        if (&OPCODES[static_cast<size_t>(i)] == &op) {
+        if (&cpuOpcodesTable[static_cast<size_t>(i)] == &op) {
             opcode = static_cast<uint8_t>(i);
             found = true;
             break;
@@ -925,7 +925,7 @@ bool assignPcAndLabels(std::vector<ParsedLine>& lines,
 
                 line.pc = currentPc;
 
-                const Op* op = chooseOpcode(line, p, labels, error);
+                const CpuOpcode* op = chooseOpcode(line, p, labels, error);
                 if (!op) return false;
 
                 line.size = instrSize(*op, p);
@@ -1063,7 +1063,7 @@ bool reassembleDumpAsmToRom(const std::string& asmPath,
 
         if (line.kind != ParsedLine::Kind::Instr) continue;
 
-        const Op* op = chooseOpcode(line, line.pBefore, labels, error);
+        const CpuOpcode* op = chooseOpcode(line, line.pBefore, labels, error);
         if (!op) return false;
 
         uint8_t size = 0;

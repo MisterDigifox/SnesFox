@@ -194,7 +194,7 @@ struct DecodedLine {
     std::string comment;
 };
 
-uint8_t instrSize(const Op& op, uint8_t p) {
+uint8_t instrSize(const CpuOpcode& op, uint8_t p) {
     switch (op.mode) {
         case AddrMode::ImmediateM:
             return (p & 0x20) ? 2 : 3;
@@ -348,7 +348,7 @@ bool isPlausibleFunctionEntry(const std::vector<uint8_t>& rom, uint32_t target) 
 
         if (isClearlyBadFunctionEntryOpcode(op) && i == 0) return false;
 
-        const Op& meta = OPCODES[op];
+        const CpuOpcode& meta = cpuOpcodesTable[op];
         if (!meta.valid) return false;
 
         const uint8_t size = instrSize(meta, p);
@@ -463,7 +463,7 @@ std::string formatAbsolute16OrLabel(
     return "$" + hex16(value);
 }
 
-std::string operandStr(const Op& op,
+std::string operandStr(const CpuOpcode& op,
                        uint32_t pc,
                        const uint8_t* b,
                        uint8_t size,
@@ -718,7 +718,7 @@ std::string snesHwRegisterName(uint16_t a) {
     return "";
 }
 
-bool extractAbsoluteHwAddr(const Op& meta,
+bool extractAbsoluteHwAddr(const CpuOpcode& meta,
                            uint32_t pc,
                            const std::array<uint8_t, 4>& bytes,
                            uint8_t size,
@@ -759,7 +759,7 @@ std::string cgramPaletteHint(uint16_t a) {
     }
 }
 
-std::string hardwareCommentFor(const Op& meta,
+std::string hardwareCommentFor(const CpuOpcode& meta,
                                uint32_t pc,
                                const std::array<uint8_t, 4>& bytes,
                                uint8_t size) {
@@ -1025,7 +1025,7 @@ void dumpRomAsAsmFull(const std::vector<uint8_t>& rom,
             uint8_t op = 0;
             if (!romRead8(rom, pc, op)) break;
 
-            const Op& meta = OPCODES[op];
+            const CpuOpcode& meta = cpuOpcodesTable[op];
             uint8_t size = instrSize(meta, p);
             if (size == 0 || size > 4) break;
 
@@ -1102,7 +1102,7 @@ void dumpRomAsAsmFull(const std::vector<uint8_t>& rom,
             uint8_t op = 0;
             if (!romRead8(rom, pc, op)) break;
 
-            const Op& meta = OPCODES[op];
+            const CpuOpcode& meta = cpuOpcodesTable[op];
             DecodedLine line;
             line.pc = pc;
             line.name = meta.valid ? meta.name : ".db";
@@ -1326,7 +1326,7 @@ void dumpRomAsAsmFull(const std::vector<uint8_t>& rom,
 
     // Add hardware register labels for accessed addresses
     for (const auto& [pc, line] : decoded) {
-        const Op& meta = OPCODES[line.bytes[0]];
+        const CpuOpcode& meta = cpuOpcodesTable[line.bytes[0]];
         uint32_t hwAddr = 0;
         if (!extractAbsoluteHwAddr(meta, pc, line.bytes, line.size, hwAddr)) continue;
         const uint16_t a = static_cast<uint16_t>(hwAddr & 0xFFFF);
@@ -1338,8 +1338,8 @@ void dumpRomAsAsmFull(const std::vector<uint8_t>& rom,
 
     // Recompute operand strings now that hardware register labels are in the map
     for (auto& [pc, line] : decoded) {
-        if (!OPCODES[line.bytes[0]].valid) continue;
-        const Op& meta = OPCODES[line.bytes[0]];
+        if (!cpuOpcodesTable[line.bytes[0]].valid) continue;
+        const CpuOpcode& meta = cpuOpcodesTable[line.bytes[0]];
         line.operand = operandStr(meta, pc, line.bytes.data(), line.size, labels);
     }
 
