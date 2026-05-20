@@ -196,12 +196,29 @@ private:
     uint8_t  getPixel(int bpp, uint16_t base, uint16_t tileNum, int row, int col) const;
     uint32_t cgramToArgb(uint16_t bgr555) const;
     uint32_t applyInidispLuma(uint32_t argb) const;
-    uint32_t compositePixel(int x,
-                             const LayerPixel*  bg0,
-                             const LayerPixel*  bg1,
-                             const LayerPixel*  bg2,
-                             const LayerPixel*  bg3,
-                             const SpritePixel* spr) const;
+
+    // One column of layer priority stacking (same ordering for TM and TS composites).
+    struct CompositeSample {
+        uint32_t rgb = 0xFF000000u; // ARGB, pre-$2100 luma — rgb may be backdrop
+        uint8_t  winCmBit = 0x20;   // SNES CGADSUB: backdrop enables bit 5 ("B")
+        uint8_t  winIdx = 0;        // CGRAM entry; sprites mapped to 128+…
+    };
+
+    CompositeSample compositeSample(int x,
+                                    const LayerPixel*  bg0,
+                                    const LayerPixel*  bg1,
+                                    const LayerPixel*  bg2,
+                                    const LayerPixel*  bg3,
+                                    const SpritePixel* spr) const;
+    // Blend main with fixed colour or optional sub-stack sample per $2130 bit1.
+    uint32_t finalizePixelRgb(int x, const CompositeSample& main,
+                              const CompositeSample* subSampleMaybe) const;
+
+    // Color window helpers (WOBJSEL color nibbles + WH* + WOBJLOG bits 3-2).
+    bool colorWindowCombinedClip(int x) const;
+    bool forceMainBlackFromColorWindow(int x) const;
+    bool forceSubTransparentFromColorWindow(int x) const;
+
     // Window helpers
     bool windowMaskBg(int x, int bg) const;
     bool windowMaskObj(int x) const;

@@ -840,6 +840,54 @@ bool Ppu::windowMaskObj(int x) const {
 }
 
 // -----------------------------------------------------------------------
+// colorWindowCombinedClip — color-window mask (WOBJSEL color bits + WOBJLOG 3:2)
+// -----------------------------------------------------------------------
+bool Ppu::colorWindowCombinedClip(int x) const {
+    const bool w1_en   = (m_wobjsel >> 4) & 1;
+    const bool w1_area = (m_wobjsel >> 5) & 1;
+    const bool w2_en   = (m_wobjsel >> 6) & 1;
+    const bool w2_area = (m_wobjsel >> 7) & 1;
+
+    if (!w1_en && !w2_en) return false;
+
+    const bool in_w1 = (m_wh[0] <= m_wh[1]) && (x >= m_wh[0] && x <= m_wh[1]);
+    const bool in_w2 = (m_wh[2] <= m_wh[3]) && (x >= m_wh[2] && x <= m_wh[3]);
+
+    const bool clip_w1 = w1_area ? in_w1 : !in_w1;
+    const bool clip_w2 = w2_area ? in_w2 : !in_w2;
+
+    if (w1_en && !w2_en) return clip_w1;
+    if (!w1_en)          return clip_w2;
+
+    switch ((m_wobjlog >> 2) & 0x03) {
+    case 0: return clip_w1 || clip_w2;
+    case 1: return clip_w1 && clip_w2;
+    case 2: return clip_w1 ^  clip_w2;
+    default:return !(clip_w1 ^ clip_w2);
+    }
+}
+
+bool Ppu::forceMainBlackFromColorWindow(int x) const {
+    const unsigned mm = (m_cgswsel >> 6) & 0x03u;
+    if (mm == 0) return false;
+    if (mm == 3) return true;
+
+    const bool insideOpening = !colorWindowCombinedClip(x);
+    // MM=1 Outside — black outside the visible color-window opening.
+    // MM=2 Inside  — black inside the opening.
+    return (mm == 1u) ? !insideOpening : insideOpening;
+}
+
+bool Ppu::forceSubTransparentFromColorWindow(int x) const {
+    const unsigned ss = (m_cgswsel >> 4) & 0x03u;
+    if (ss == 0) return false;
+    if (ss == 3) return true;
+
+    const bool insideOpening = !colorWindowCombinedClip(x);
+    return (ss == 1u) ? !insideOpening : insideOpening;
+}
+
+// -----------------------------------------------------------------------
 // applyWindowMask — clip layers by TMW (main) or TSW (sub) window masks
 // -----------------------------------------------------------------------
 void Ppu::applyWindowMask(int /*line*/,
@@ -860,39 +908,34 @@ void Ppu::applyWindowMask(int /*line*/,
 }
 
 // -----------------------------------------------------------------------
-// compositePixel — pick the highest-priority opaque pixel for column x (main screen).
-//   Mode 1 (SNESdev PPU_registers BGMODE table; left = front / top):
-//     bg3Priority clear : S3 1H 2H S2 1L 2L S1 3H S0 3L
-//     bg3Priority set   : 3H S3 1H 2H S2 1L 2L S1 S0 3L
-//   Mode 0 (all 2bpp, 4 layers):
-//     BG1p1 > BG2p1 > BG3p1 > BG4p1 > BG1p0 > BG2p0 > BG3p0 > BG4p0
+// compositeSample — opaque winner + backdrop for TM or TS (pre–color math).
+//   Mode ordering matches SNESdev BGMODE / priority charts.
 // -----------------------------------------------------------------------
-uint32_t Ppu::compositePixel(int x,
-                              const LayerPixel*  bg0,
-                              const LayerPixel*  bg1,
-                              const LayerPixel*  bg2,
-                              const LayerPixel*  bg3,
-                              const SpritePixel* spr) const
+auto Ppu::compositeSample(int x,
+                          const LayerPixel*  bg0,
+                          const LayerPixel*  bg1,
+                          const LayerPixel*  bg2,
+                          const LayerPixel*  bg3,
+                          const SpritePixel* spr) const -> CompositeSample
 {
     const LayerPixel* layers[4] = { bg0, bg1, bg2, bg3 };
 
-    // Winner state — cgramIdx=0 means backdrop (CGADSUB bit 0)
-    uint8_t winIdx     = 0;
-    uint8_t winCmBit   = 0x01;  // CGADSUB bit: 0=backdrop,1=OBJ,2=BG1,3=BG2,4=BG3,5=BG4
-    bool    found      = false;
+    uint8_t winIdx   = 0;
+    uint8_t winCmBit = 0x20;
+    bool    found    = false;
 
     auto tryBg = [&](int bg, uint8_t pri) {
         if (found) return;
         if (layers[bg][x].cgramIdx == 0 || layers[bg][x].priority != pri) return;
         winIdx   = layers[bg][x].cgramIdx;
-        winCmBit = static_cast<uint8_t>(1u << (bg + 2));   // BG1=bit2…BG4=bit5
+        winCmBit = static_cast<uint8_t>(1u << bg);   // BG1=$2131 bit0 … BG4=bit3
         found    = true;
     };
     auto trySpr = [&](uint8_t pri) {
         if (found) return;
         if (spr[x].cgramIdx == 0 || spr[x].priority != pri) return;
         winIdx   = spr[x].cgramIdx;
-        winCmBit = 0x02;    // OBJ = bit 1
+        winCmBit = 0x10;
         found    = true;
     };
 
@@ -916,7 +959,7 @@ uint32_t Ppu::compositePixel(int x,
             trySpr(2);
             tryBg(0,0); tryBg(1,0); // 1L 2L
             trySpr(1);
-            trySpr(0);               // SNES ordering: … S1, S0, then 3L
+            trySpr(0);
             tryBg(2,0);             // 3L
         } else {
             trySpr(3);
@@ -930,8 +973,9 @@ uint32_t Ppu::compositePixel(int x,
         }
         break;
 
-    // Modes 2/4/5/6 — same priority table as Mode 3 (two BG layers + sprites)
-    case 2: case 4: case 5:
+    case 2:
+    case 4:
+    case 5:
         trySpr(3);
         tryBg(0,1); tryBg(1,1);
         trySpr(2);
@@ -949,7 +993,6 @@ uint32_t Ppu::compositePixel(int x,
         trySpr(0);
         break;
 
-    // Mode 6: single BG layer
     case 6:
         trySpr(3);
         tryBg(0,1);
@@ -974,48 +1017,84 @@ uint32_t Ppu::compositePixel(int x,
         break;
     }
 
-    // Resolve CGRAM color of winner
-    uint32_t mainColor = cgramToArgb(m_cgram[winIdx]);
+    CompositeSample sample{};
+    sample.winCmBit = winCmBit;
+    sample.winIdx   = winIdx;
+    sample.rgb      = cgramToArgb(m_cgram[winIdx]);
 
-    // Mode 7 direct colour bypasses CGRAM indexing for BG layers when $2130.bit0 is set.
-    if ((m_bgMode == 7) && ((m_cgswsel & 1) != 0) && found && (winCmBit == 0x04 || winCmBit == 0x08)) {
-        mainColor = mode7DirectColorArgb(winIdx);
+    // Mode 7 direct colour bypasses CGRAM indexing for affine BG tiles when $2130 bit0 set.
+    if ((m_bgMode == 7) && ((m_cgswsel & 1) != 0) && found && (winCmBit == 0x01 || winCmBit == 0x02)) {
+        sample.rgb = mode7DirectColorArgb(winIdx);
+    }
+    return sample;
+}
+
+uint32_t Ppu::finalizePixelRgb(int x, const CompositeSample& main,
+                               const CompositeSample* subSampleMaybe) const
+{
+    if (forceMainBlackFromColorWindow(x)) {
+        return 0xFF000000u;
     }
 
-    // GFX-07: Fixed-color math
-    // Apply when: cgadsub enables this layer AND cgswsel says to apply
-    // cgswsel bits 7:6: 00=always, 01=inside window, 10=outside window, 11=never
-    const uint8_t cmWhen = (m_cgswsel >> 6) & 0x03;
-    const bool doColorMath = (m_cgadsub & winCmBit) && (cmWhen != 3);
-    // For window-conditional modes (01/10) we approximate as "always" until
-    // sub-screen window logic is fully implemented.
-    if (doColorMath) {
-        const bool doSub  = (m_cgadsub >> 7) & 1;
-        const bool doHalf = (m_cgadsub >> 6) & 1;
-
-        const uint32_t subR = static_cast<uint32_t>(m_fixedR) << 3;
-        const uint32_t subG = static_cast<uint32_t>(m_fixedG) << 3;
-        const uint32_t subB = static_cast<uint32_t>(m_fixedB) << 3;
-
-        uint32_t mR = (mainColor >> 16) & 0xFF;
-        uint32_t mG = (mainColor >>  8) & 0xFF;
-        uint32_t mB =  mainColor        & 0xFF;
-
-        if (doSub) {
-            mR = (mR > subR) ? mR - subR : 0u;
-            mG = (mG > subG) ? mG - subG : 0u;
-            mB = (mB > subB) ? mB - subB : 0u;
-        } else {
-            mR = std::min(255u, mR + subR);
-            mG = std::min(255u, mG + subG);
-            mB = std::min(255u, mB + subB);
+    // CGADSUB MHBO4321 — backdrop bit5, OBJ bit4, BG1..4 bits0..3.
+    bool doColorMath = (m_cgadsub & main.winCmBit) != 0;
+    // OBJ palettes 0–3 never receive color math (main screen sprites only).
+    if (main.winCmBit == 0x10) {
+        if ((m_cgadsub & 0x10) == 0) {
+            doColorMath = false;
+        } else if (main.winIdx >= 128) {
+            const unsigned pal = static_cast<unsigned>(main.winIdx - 128u) >> 4u;
+            if (pal < 4u) doColorMath = false;
         }
-        if (doHalf) { mR >>= 1; mG >>= 1; mB >>= 1; }
-
-        mainColor = 0xFF000000u | (mR << 16) | (mG << 8) | mB;
     }
 
-    return mainColor;
+    if (!doColorMath) {
+        return main.rgb;
+    }
+
+    uint32_t subR;
+    uint32_t subG;
+    uint32_t subB;
+
+    const bool subFromScreen = (m_cgswsel & 0x02u) != 0;
+    if (forceSubTransparentFromColorWindow(x)) {
+        subR = subG = subB = 0;
+    } else if (subFromScreen) {
+        if (!subSampleMaybe) {
+            subR = subG = subB = 0;
+        } else {
+            subR = (subSampleMaybe->rgb >> 16) & 0xFF;
+            subG = (subSampleMaybe->rgb >> 8) & 0xFF;
+            subB = subSampleMaybe->rgb & 0xFF;
+        }
+    } else {
+        subR = static_cast<uint32_t>(m_fixedR) << 3;
+        subG = static_cast<uint32_t>(m_fixedG) << 3;
+        subB = static_cast<uint32_t>(m_fixedB) << 3;
+    }
+
+    const bool doSub  = ((m_cgadsub >> 7) & 1) != 0;
+    const bool doHalf = ((m_cgadsub >> 6) & 1) != 0;
+
+    uint32_t mR = (main.rgb >> 16) & 0xFF;
+    uint32_t mG = (main.rgb >> 8) & 0xFF;
+    uint32_t mB = main.rgb & 0xFF;
+
+    if (doSub) {
+        mR = (mR > subR) ? mR - subR : 0u;
+        mG = (mG > subG) ? mG - subG : 0u;
+        mB = (mB > subB) ? mB - subB : 0u;
+    } else {
+        mR = std::min(255u, mR + subR);
+        mG = std::min(255u, mG + subG);
+        mB = std::min(255u, mB + subB);
+    }
+    if (doHalf) {
+        mR >>= 1;
+        mG >>= 1;
+        mB >>= 1;
+    }
+    return 0xFF000000u | (mR << 16) | (mG << 8) | mB;
 }
 
 // -----------------------------------------------------------------------
@@ -1066,43 +1145,45 @@ void Ppu::renderScanline(int line) {
             m_vram[(tm3+2)&0x7FFF], m_vram[(tm3+3)&0x7FFF]);
     }
 
-    // Per-layer pixel buffers (default: transparent)
+    // Per-layer pixel buffers (TM | TS renders — split into main/sub composites below)
     LayerPixel  bg0[256]{}, bg1[256]{}, bg2[256]{}, bg3[256]{};
     SpritePixel spr[256]{};
 
+    const uint8_t tmts = static_cast<uint8_t>(static_cast<unsigned>(m_tm) | static_cast<unsigned>(m_ts));
+
     switch (m_bgMode) {
     case 0:
-        if (m_tm & 0x01) renderBg(0, 2, line, bg0);
-        if (m_tm & 0x02) renderBg(1, 2, line, bg1);
-        if (m_tm & 0x04) renderBg(2, 2, line, bg2);
-        if (m_tm & 0x08) renderBg(3, 2, line, bg3);
+        if (tmts & 0x01) renderBg(0, 2, line, bg0);
+        if (tmts & 0x02) renderBg(1, 2, line, bg1);
+        if (tmts & 0x04) renderBg(2, 2, line, bg2);
+        if (tmts & 0x08) renderBg(3, 2, line, bg3);
         break;
     case 1:
-        if (m_tm & 0x01) renderBg(0, 4, line, bg0);
-        if (m_tm & 0x02) renderBg(1, 4, line, bg1);
-        if (m_tm & 0x04) renderBg(2, 2, line, bg2);
+        if (tmts & 0x01) renderBg(0, 4, line, bg0);
+        if (tmts & 0x02) renderBg(1, 4, line, bg1);
+        if (tmts & 0x04) renderBg(2, 2, line, bg2);
         break;
     case 2:
-        if (m_tm & 0x01) renderBg(0, 4, line, bg0);
-        if (m_tm & 0x02) renderBg(1, 4, line, bg1);
+        if (tmts & 0x01) renderBg(0, 4, line, bg0);
+        if (tmts & 0x02) renderBg(1, 4, line, bg1);
         break;
     case 3:
-        if (m_tm & 0x01) renderBg(0, 8, line, bg0);
-        if (m_tm & 0x02) renderBg(1, 4, line, bg1);
+        if (tmts & 0x01) renderBg(0, 8, line, bg0);
+        if (tmts & 0x02) renderBg(1, 4, line, bg1);
         break;
     case 4:
-        if (m_tm & 0x01) renderBg(0, 8, line, bg0);
-        if (m_tm & 0x02) renderBg(1, 2, line, bg1);
+        if (tmts & 0x01) renderBg(0, 8, line, bg0);
+        if (tmts & 0x02) renderBg(1, 2, line, bg1);
         break;
     case 5:
-        if (m_tm & 0x01) renderBg(0, 4, line, bg0);
-        if (m_tm & 0x02) renderBg(1, 2, line, bg1);
+        if (tmts & 0x01) renderBg(0, 4, line, bg0);
+        if (tmts & 0x02) renderBg(1, 2, line, bg1);
         break;
     case 6:
-        if (m_tm & 0x01) renderBg(0, 4, line, bg0);
+        if (tmts & 0x01) renderBg(0, 4, line, bg0);
         break;
     case 7:
-        if ((m_tm & 0x03) != 0) {
+        if ((tmts & 0x03) != 0) {
             renderMode7(line, bg0, bg1);
         }
         break;
@@ -1111,12 +1192,54 @@ void Ppu::renderScanline(int line) {
         return;
     }
 
-    if (m_tm & 0x10) renderSprites(line, spr);  // bit 4 = OBJ on main screen
+    if (tmts & 0x10) renderSprites(line, spr);
 
-    // Apply main-screen window masking (GFX-06)
-    applyWindowMask(line, bg0, bg1, bg2, bg3, spr, true);
+    // Split raster into main/sub designation, then independent per-screen window masking.
+    LayerPixel  bg0m[256]{}, bg1m[256]{}, bg2m[256]{}, bg3m[256]{};
+    LayerPixel  bg0s[256]{}, bg1s[256]{}, bg2s[256]{}, bg3s[256]{};
+    SpritePixel sprm[256]{};
+    SpritePixel sprs[256]{};
 
+    std::memcpy(bg0m, bg0, sizeof(bg0));
+    std::memcpy(bg1m, bg1, sizeof(bg1));
+    std::memcpy(bg2m, bg2, sizeof(bg2));
+    std::memcpy(bg3m, bg3, sizeof(bg3));
+    std::memcpy(sprm, spr, sizeof(spr));
+    std::memcpy(bg0s, bg0, sizeof(bg0));
+    std::memcpy(bg1s, bg1, sizeof(bg1));
+    std::memcpy(bg2s, bg2, sizeof(bg2));
+    std::memcpy(bg3s, bg3, sizeof(bg3));
+    std::memcpy(sprs, spr, sizeof(spr));
+
+    auto clearIfDisabledMain = [&](uint8_t tmBit, LayerPixel* b) {
+        if ((m_tm & tmBit) == 0) std::memset(b, 0, sizeof(LayerPixel) * 256u);
+    };
+    clearIfDisabledMain(0x01, bg0m);
+    clearIfDisabledMain(0x02, bg1m);
+    clearIfDisabledMain(0x04, bg2m);
+    clearIfDisabledMain(0x08, bg3m);
+    if ((m_tm & 0x10) == 0) std::memset(sprm, 0, sizeof(sprm));
+
+    auto clearIfDisabledSub = [&](uint8_t tsBit, LayerPixel* b) {
+        if ((m_ts & tsBit) == 0) std::memset(b, 0, sizeof(LayerPixel) * 256u);
+    };
+    clearIfDisabledSub(0x01, bg0s);
+    clearIfDisabledSub(0x02, bg1s);
+    clearIfDisabledSub(0x04, bg2s);
+    clearIfDisabledSub(0x08, bg3s);
+    if ((m_ts & 0x10) == 0) std::memset(sprs, 0, sizeof(sprs));
+
+    applyWindowMask(line, bg0m, bg1m, bg2m, bg3m, sprm, true);
+    applyWindowMask(line, bg0s, bg1s, bg2s, bg3s, sprs, false);
+
+    const bool useSubAddend = (m_cgswsel & 0x02u) != 0;
     for (int x = 0; x < 256; ++x) {
-        row[x] = applyInidispLuma(compositePixel(x, bg0, bg1, bg2, bg3, spr));
+        const CompositeSample mains = compositeSample(x, bg0m, bg1m, bg2m, bg3m, sprm);
+        if (useSubAddend) {
+            const CompositeSample subs = compositeSample(x, bg0s, bg1s, bg2s, bg3s, sprs);
+            row[x] = applyInidispLuma(finalizePixelRgb(x, mains, &subs));
+        } else {
+            row[x] = applyInidispLuma(finalizePixelRgb(x, mains, nullptr));
+        }
     }
 }
