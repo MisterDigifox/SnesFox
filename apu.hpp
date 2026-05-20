@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-class ApuIo {
+class APU {
 public:
     void reset();
 

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "apu_io.hpp"
+#include "apu.hpp"
 #include "dma.hpp"
 #include "header.hpp"
 #include "ppu.hpp"
@@ -48,7 +48,7 @@ private:
     // 128 KB WRAM
     std::array<uint8_t, 128 * 1024> m_wram{};
 
-    ApuIo m_apu;
+    APU m_apu;
     Dma   m_dma;
     Ppu   m_ppu;
 

@@ -1,6 +1,6 @@
-#include "apu_io.hpp"
+#include "apu.hpp"
 
-void ApuIo::reset() {
+void APU::reset() {
     m_cpuToApu.fill(0);
 
     // Standard IPL boot handshake: LDX $2140 with X16 reads $2141:$2140 → $BBAA
@@ -10,11 +10,11 @@ void ApuIo::reset() {
     m_apuToCpu[3] = 0x00;
 }
 
-uint8_t ApuIo::readPort(uint16_t addr) const {
+uint8_t APU::readPort(uint16_t addr) const {
     return m_apuToCpu[addr - 0x2140];
 }
 
-void ApuIo::writePort(uint16_t addr, uint8_t value) {
+void APU::writePort(uint16_t addr, uint8_t value) {
     const size_t i = static_cast<size_t>(addr - 0x2140);
     if (i >= 4) return;
 
@@ -24,4 +24,4 @@ void ApuIo::writePort(uint16_t addr, uint8_t value) {
     m_apuToCpu[i] = value;
 }
 
-void ApuIo::step() {}
+void APU::step() {}
