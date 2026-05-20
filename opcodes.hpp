@@ -40,6 +40,9 @@ enum class AddrMode : uint8_t {
     SpcDpRel8,        // dp + rel offset (BBC/BBS/CBNE/DBNZ dp)
     SpcDpImm8,        // dp + immediate (three-byte form)
     SpcDpPair,        // two direct-page operands (MOV dp(dd), dp(ss), ADC dp pair, …)
+
+    // Super FX / GSU (baseline mnemonics; ALT1–ALT3 change meanings of some opcode bytes).
+    GsuImmediateWord, // IWT Rn, #$imm16 — 16-bit literal after opcode (GSU endianness LE in ROM dumps)
 };
 
 struct CpuOpcode {
@@ -52,5 +55,6 @@ struct CpuOpcode {
 
 extern const std::array<CpuOpcode, 256> cpuOpcodesTable;
 extern const std::array<CpuOpcode, 256> apuOpcodesTable;
+extern const std::array<CpuOpcode, 256> gsuOpcodesTable;
 
 void printMissingCpuOpcodes(const std::array<CpuOpcode, 256>& ops);

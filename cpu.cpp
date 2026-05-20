@@ -522,6 +522,8 @@ uint8_t operandSizeForMode(AddrMode mode, uint8_t p) {
     switch (mode) {
         case AddrMode::Immediate8:
             return 1;
+        case AddrMode::GsuImmediateWord:
+            return 2;
         case AddrMode::ImmediateM:
             return flagSet(p, FLAG_M) ? 1 : 2;
         case AddrMode::ImmediateX:
@@ -597,6 +599,8 @@ std::string formatOperand(
             return "A";
         case AddrMode::Immediate8:
             return "#" + hex8(b1);
+        case AddrMode::GsuImmediateWord:
+            return "#$" + raw16(read16le(b1, b2));
         case AddrMode::ImmediateM:
             return flagSet(p, FLAG_M) ? "#" + hex8(b1) : "#$" + raw16(read16le(b1, b2));
         case AddrMode::ImmediateX:

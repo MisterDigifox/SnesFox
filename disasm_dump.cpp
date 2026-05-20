@@ -476,6 +476,9 @@ std::string operandStr(const CpuOpcode& op,
         case AddrMode::Immediate8:
             return "#$" + hex8(b[1]);
 
+        case AddrMode::GsuImmediateWord:
+            return "#$" + hex16(read16le(b[1], b[2]));
+
         case AddrMode::ImmediateM:
         case AddrMode::ImmediateX:
             if (size == 2) return "#$" + hex8(b[1]);
