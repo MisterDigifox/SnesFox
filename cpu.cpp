@@ -3214,36 +3214,40 @@ void CPU::step(Bus& bus) {
             break;
         }
 
-        case 0x44: { // MVP
-            uint8_t srcBank = b1;
-            uint8_t dstBank = b2;
-        
+        case 0x44: { // MVP — object code: opcode, dest bank (b1), source bank (b2); assembler reads src,dst.
+            const uint8_t dstBank = b1;
+            const uint8_t srcBank = b2;
+
             uint8_t value = bus.read(srcBank, m_x);
             bus.write(dstBank, m_y, value);
-        
+
             m_x--;
             m_y--;
             m_a--;
-        
+
             if (m_a != 0xFFFF) {
                 m_pc -= 3; // repeat instruction
+            } else {
+                m_db = dstBank; // 65816: DB ← destination bank when block move finishes.
             }
             break;
         }
 
-        case 0x54: { // MVN
-            uint8_t srcBank = b1;
-            uint8_t dstBank = b2;
-        
+        case 0x54: { // MVN — same operand layout as MVP.
+            const uint8_t dstBank = b1;
+            const uint8_t srcBank = b2;
+
             uint8_t value = bus.read(srcBank, m_x);
             bus.write(dstBank, m_y, value);
-        
+
             m_x++;
             m_y++;
             m_a--;
-        
+
             if (m_a != 0xFFFF) {
                 m_pc -= 3;
+            } else {
+                m_db = dstBank;
             }
             break;
         }
