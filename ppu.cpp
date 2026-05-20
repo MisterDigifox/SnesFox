@@ -180,11 +180,12 @@ void Ppu::writeReg(uint16_t addr, uint8_t value) {
         writeOam(value);
         break;
 
-    // --- $2105 BGMODE ---
+    // --- $2105 BGMODE: lower 3 bits = mode; bit3 = BG3 priority (Mode 1 only on hw);
+    // bits7-4 = per-BG tile size (ignored while mode=7 fixed 8×8 layout).
     case 0x2105:
         m_bgMode      = value & 0x07;
         m_bg3Priority = (value >> 3) & 1;
-        m_bgTileSize  = value >> 4;   // bit0=BG1, bit1=BG2, bit2=BG3, bit3=BG4
+        m_bgTileSize  = value >> 4;   // Mode 7 ignores these (always 8×8 via renderMode7)
         break;
 
     // --- $2106 MOSAIC ---
@@ -510,7 +511,7 @@ uint32_t Ppu::mode7DirectColorArgb(uint8_t pixel) const {
 }
 
 // -----------------------------------------------------------------------
-// renderMode7 — affine BG1 + EXTBG BG2 overlay (VRAM layout per SNES / bsnes fast mode7).
+// renderMode7 — affine BG1 (+ optional BG2 EXT via $2133.6 while in mode 7).
 // -----------------------------------------------------------------------
 void Ppu::renderMode7(int line, LayerPixel* affineOut, LayerPixel* extBgOut) const {
     auto clipM7 = [](int n) -> int { return (n & 0x2000) ? (n | ~1023) : (n & 1023); };
@@ -547,8 +548,12 @@ void Ppu::renderMode7(int line, LayerPixel* affineOut, LayerPixel* extBgOut) con
 
     const unsigned repeatMode = (static_cast<unsigned>(m_m7sel) >> 6) & 3u;
 
-    const bool drawBg1 = (m_tm & 0x01) != 0;
-    const bool drawBg2 = (m_tm & 0x02) != 0;
+    // Layer fetch must rasterize TM|TS; main/sub masking happens later on copies.
+    const uint8_t m7Layers = static_cast<uint8_t>(static_cast<unsigned>(m_tm) | static_cast<unsigned>(m_ts));
+    const bool    drawBg1  = (m7Layers & 0x01) != 0;
+    // BG2 overlay exists only when $2133 EXTBG (bit 6) enables Mode 7 extension tiles.
+    const bool mode7Ext  = ((m_setini >> 6) & 1) != 0;
+    const bool drawBg2   = ((m7Layers & 0x02) != 0) && mode7Ext;
 
     for (int X = 0; X < 256; ++X) {
         const int xWalk = ((m_m7sel & 1) == 0) ? X : (255 - X);
@@ -1002,16 +1007,19 @@ auto Ppu::compositeSample(int x,
         trySpr(0);
         break;
 
-    case 7:
+    // Mode 7 (SNESdev Backgrounds §Priority row): front → back
+    //   S3  S2  2H  S1  1L  S0  2L   (2H/2L only when $2133 EXTBG = 1; BG1 is 1L only)
+    case 7: {
+        const bool ext = ((m_setini >> 6) & 1) != 0;
         trySpr(3);
-        tryBg(0, 1);
-        tryBg(1, 1);
         trySpr(2);
-        tryBg(0, 0);
-        tryBg(1, 0);
+        if (ext) tryBg(1, 1);
         trySpr(1);
+        tryBg(0, 0);  // Affine layer — tile priority is always low (matches 1L in the chart)
         trySpr(0);
+        if (ext) tryBg(1, 0);
         break;
+    }
 
     default:
         break;
