@@ -84,7 +84,7 @@ Designed to round-trip the assembler text produced by `disasm` for supported dum
 
 Opens the debug window (pause, single-step).
 
-**APU I/O stubs:** There is no SPC700 yet; `$2140`–`$2143` use an echo stub. Reset matches typical IPL/handshake tooling by presenting **`$AA` at `$2140` and `$BB` at `$2141`**, so a 16‑bit read at `$2140` yields **`$BBAA`**. Rare ROMs that first wait until those ports read as zero can set **`SNESFOX_APU_PORTS_ZERO=1`** before launch.
+**APU / SPC700:** The SPC700 runs at IPL (`$FFC0`) using the built‑in boot ROM (documented disassembly mirrors nocash *fullsnes*). Main‑CPU ports **`$2140`–`$2143`** are the four **CPU→SPC** latches; the SPC sees them as **`$00F4`–`$00F7`** reads, and writes to those addresses are the **SPC→CPU** side visible to **`$2140`–`$2143`** reads (including the IPL **`$AA` / `$BB`** ready signal after zero‑page clear). Scheduling uses a coarse **12:7** carry (SNES CPU vs 1.024 MHz SMP). **S-DSP is not emulated:** reads of **`$F3`** return **idle (0)** and writes there are cleared immediately so SPC code that busy‑waits on the DSP does not wedge the upload/handshake with the main CPU. If a ROM still hangs, run with **`SNESFOX_SPC_LOG=1`** to log illegal opcodes or **`STOP`**; undefined opcodes are treated as **2‑cycle NOP** by default (set **`SNESFOX_SPC_STRICT=1`** to halt on them again). For unusual ROMs that insist ports read as **zero before** the IPL handshake, set **`SNESFOX_APU_PORTS_ZERO=1`** so resets start with zeroed port latches.
 
 ## Preview
 

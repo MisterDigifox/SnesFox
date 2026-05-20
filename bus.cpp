@@ -109,7 +109,7 @@ bool Bus::stepPeripherals(uint64_t totalCycles) {
     m_inVBlank           = nowVBlank;
 
     if (nmiReturn) {
-        m_apu.step();
+        m_apu.step(delta);
         return true;
     }
 
@@ -125,7 +125,7 @@ bool Bus::stepPeripherals(uint64_t totalCycles) {
         }
     }
 
-    m_apu.step();
+    m_apu.step(delta);
     return false;
 }
 

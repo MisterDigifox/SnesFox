@@ -44,11 +44,11 @@ uint16_t Spc700::read16Zp(APU& apu, uint8_t d) const {
 }
 
 uint8_t Spc700::ramRead(APU& apu, uint16_t adr) const {
-    return 0;//const_cast<const APU*>(&apu)->spcPeek(adr);
+    return apu.spcPeek(adr);
 }
 
 void Spc700::ramWrite(APU& apu, uint16_t adr, uint8_t v) {
-    //apu.spcPoke(adr, v);
+    apu.spcPoke(adr, v);
 }
 
 uint16_t Spc700::read16Mem(APU& apu, uint16_t adr) const {
@@ -2082,19 +2082,25 @@ uint32_t Spc700::step(APU& apu) {
             return 12;
 
         default:
-            m_halted = true;
+            // Undefined SPC700 opcode: halting used to wedge games that hit any
+            // missing decode path (CPU then waits on $2140-$2143 forever). Default
+            // to a 2-cycle NOP so uploads and drivers can proceed without S-DSP.
+            if (std::getenv("SNESFOX_SPC_STRICT")) {
+                m_halted = true;
+            }
             if (std::getenv("SNESFOX_SPC_LOG")) {
                 const uint16_t opcAddr =
                     static_cast<uint16_t>(static_cast<unsigned>(m_pc) - 1u);
                 std::fprintf(stderr,
                              "[spc700] illegal opcode $%02X at PC=$%04X "
-                             "(A=$%02X X=$%02X Y=$%02X PSW=$%02X)\n",
+                             "(A=$%02X X=$%02X Y=$%02X PSW=$%02X)%s\n",
                              opc,
                              opcAddr,
                              m_a,
                              m_x,
                              m_y,
-                             m_psw);
+                             m_psw,
+                             std::getenv("SNESFOX_SPC_STRICT") ? " [HALT]" : " [NOP]");
             }
             return 2;
     }

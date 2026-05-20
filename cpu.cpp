@@ -1751,15 +1751,6 @@ void CPU::step(Bus& bus) {
         case 0xCD: { // CMP abs
             const uint16_t addr = read16le(b1, b2);
 
-            // IPL / sound driver waits on CMP $2140 with values that lag behind
-            // simple write-mirroring — keep permissive ACK so crt0 progresses.
-            if (addr == 0x2140) {
-                m_p |= FLAG_ZERO;
-                m_p |= FLAG_CARRY;
-                m_p &= ~FLAG_NEGATIVE;
-                break;
-            }
-
             if (flagSet(m_p, FLAG_M)) {
                 const uint8_t value = bus.read(m_db, addr);
                 cmp8(value, m_a, m_p);
