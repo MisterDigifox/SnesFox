@@ -20,6 +20,8 @@ public:
     uint8_t  bgNBA34()       const { return m_bgNBA[1]; }   // BG3/4 CHR base
     uint16_t bgHOFS(int bg)  const { return m_bgHOFS[bg]; }
     uint16_t bgVOFS(int bg)  const { return m_bgVOFS[bg]; }
+    uint16_t mode7HOFS()     const { return m_m7hofs; }
+    uint16_t mode7VOFS()     const { return m_m7vofs; }
     uint8_t  obsel()         const { return m_obsel; }
     uint8_t  tm()            const { return m_tm; }         // main screen layers
     uint8_t  ts()            const { return m_ts; }         // sub screen layers
@@ -102,6 +104,11 @@ private:
     uint16_t m_bgHOFS[4]{};
     uint16_t m_bgVOFS[4]{};
     uint8_t  m_bgOldByte = 0;  // shared latch across all BG scroll writes
+
+    // $210D/$210E Mode 7 centering offsets (distinct from BG1 mosaic scroll merge; see bsnes io.cpp).
+    uint16_t m_m7hofs    = 0;
+    uint16_t m_m7vofs    = 0;
+    uint8_t  m_m7ofsLatch = 0;  // last written byte shared between M7 HOFS / M7 VOFS ports
 
     // -------------------------------------------------------
     // $2115-$2119 / $2139-$213A  VRAM access

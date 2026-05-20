@@ -217,8 +217,12 @@ std::vector<std::string> makeDebugLines(
             std::ostringstream oss;
             oss << "SC:" << std::uppercase << std::hex << std::setfill('0') << std::setw(2)
                 << static_cast<int>(ppu.bgSC(0)) << " NBA:" << std::setw(2)
-                << static_cast<int>(ppu.bgNBA12()) << " H:" << std::dec << ppu.bgHOFS(0) << " V:"
-                << ppu.bgVOFS(0);
+                << static_cast<int>(ppu.bgNBA12());
+            if (ppu.bgMode() == 7) {
+                oss << " M7HOFS/V:" << std::dec << ppu.mode7HOFS() << " " << ppu.mode7VOFS();
+            } else {
+                oss << " H:" << std::dec << ppu.bgHOFS(0) << " V:" << ppu.bgVOFS(0);
+            }
             lines.push_back(oss.str());
         }
         {

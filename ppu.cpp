@@ -38,6 +38,9 @@ void Ppu::reset() {
     m_m7sel = 0;
     m_m7a = 0; m_m7b = 0; m_m7c = 0; m_m7d = 0x0100;
     m_m7x = 0; m_m7y = 0;
+    m_m7hofs     = 0;
+    m_m7vofs     = 0;
+    m_m7ofsLatch = 0;
     m_m7latch           = 0;
     m_m7PendingMatAddr  = 0;
     m_m7MatAwaitHigh    = false;
@@ -204,9 +207,23 @@ void Ppu::writeReg(uint16_t addr, uint8_t value) {
     case 0x210C: m_bgNBA[1] = value; break;
 
     // --- $210D-$2114 BG scroll (shared latch) ---
-    // Pattern: HOFS = (old_latch) | ((value & 3) << 8); latch = value
-    case 0x210D: m_bgHOFS[0] = (m_bgOldByte & 0xFF) | ((value & 0x03) << 8); m_bgOldByte = value; break;
-    case 0x210E: m_bgVOFS[0] = (m_bgOldByte & 0xFF) | ((value & 0x03) << 8); m_bgOldByte = value; break;
+    // Pattern for BG mosaic scroll: HOFS = (old_latch) | ((value & 3) << 8); latch = value.
+    // $210D/$210E additionally drive Mode 7 HOFS/VOFS: each write updates a 16-bit value as
+    // (written_byte << 8) | latch.mode7, then latch.mode7 = written_byte (bsnes latch.mode7).
+    case 0x210D:
+        m_m7hofs =
+            static_cast<uint16_t>(static_cast<unsigned>(value) << 8u | static_cast<unsigned>(m_m7ofsLatch));
+        m_m7ofsLatch = value;
+        m_bgHOFS[0]  = (m_bgOldByte & 0xFF) | ((value & 0x03) << 8);
+        m_bgOldByte  = value;
+        break;
+    case 0x210E:
+        m_m7vofs =
+            static_cast<uint16_t>(static_cast<unsigned>(value) << 8u | static_cast<unsigned>(m_m7ofsLatch));
+        m_m7ofsLatch = value;
+        m_bgVOFS[0]  = (m_bgOldByte & 0xFF) | ((value & 0x03) << 8);
+        m_bgOldByte  = value;
+        break;
     case 0x210F: m_bgHOFS[1] = (m_bgOldByte & 0xFF) | ((value & 0x03) << 8); m_bgOldByte = value; break;
     case 0x2110: m_bgVOFS[1] = (m_bgOldByte & 0xFF) | ((value & 0x03) << 8); m_bgOldByte = value; break;
     case 0x2111: m_bgHOFS[2] = (m_bgOldByte & 0xFF) | ((value & 0x03) << 8); m_bgOldByte = value; break;
@@ -526,8 +543,8 @@ void Ppu::renderMode7(int line, LayerPixel* affineOut, LayerPixel* extBgOut) con
     const int Y       = line;
     const int yScreen = ((m_m7sel >> 1) & 1) ? (255 - Y) : Y;
 
-    const int hoffset = extend13(static_cast<uint16_t>(m_bgHOFS[0]));
-    const int voffset = extend13(static_cast<uint16_t>(m_bgVOFS[0]));
+    const int hoffset = extend13(m_m7hofs);
+    const int voffset = extend13(m_m7vofs);
     const int hcenter = extend13(static_cast<uint16_t>(m_m7x));
     const int vcenter = extend13(static_cast<uint16_t>(m_m7y));
 
