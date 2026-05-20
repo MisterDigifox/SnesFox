@@ -32,7 +32,14 @@ enum class AddrMode : uint8_t {
     AbsoluteIndirectLong,
     Relative8,
     Relative16,
-    BlockMove
+    BlockMove,
+
+    // SPC700/APU CpuOpcode table (reuse struct; disasm tooling).
+    SpcIndirectX,     // operand (X): byte 0 extras
+    SpcIndirectXInc,  // (X)+ loads/stores
+    SpcDpRel8,        // dp + rel offset (BBC/BBS/CBNE/DBNZ dp)
+    SpcDpImm8,        // dp + immediate (three-byte form)
+    SpcDpPair,        // two direct-page operands (MOV dp(dd), dp(ss), ADC dp pair, …)
 };
 
 struct CpuOpcode {
@@ -44,5 +51,6 @@ struct CpuOpcode {
 };
 
 extern const std::array<CpuOpcode, 256> cpuOpcodesTable;
+extern const std::array<CpuOpcode, 256> apuOpcodesTable;
 
 void printMissingCpuOpcodes(const std::array<CpuOpcode, 256>& ops);

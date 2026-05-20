@@ -538,6 +538,15 @@ uint8_t operandSizeForMode(AddrMode mode, uint8_t p) {
         case AddrMode::StackRelativeIndirectY:
         case AddrMode::Relative8:
             return 1;
+        case AddrMode::SpcDpRel8:
+            return 2;
+        case AddrMode::SpcDpImm8:
+            return 2;
+        case AddrMode::SpcDpPair:
+            return 2;
+        case AddrMode::SpcIndirectX:
+        case AddrMode::SpcIndirectXInc:
+            return 0;
         case AddrMode::Absolute:
         case AddrMode::AbsoluteX:
         case AddrMode::AbsoluteY:
@@ -634,6 +643,20 @@ std::string formatOperand(
             return hex16(branchTarget16(pc, b1, b2));
         case AddrMode::BlockMove:
             return hex8(b1) + "," + hex8(b2);
+        case AddrMode::SpcIndirectX:
+            return "(X)";
+        case AddrMode::SpcIndirectXInc:
+            return "(X)+";
+        case AddrMode::SpcDpImm8:
+            return hex8(b1) + ",#" + hex8(b2);
+        case AddrMode::SpcDpPair:
+            return hex8(b1) + "," + hex8(b2);
+        case AddrMode::SpcDpRel8: {
+            const uint16_t next = static_cast<uint16_t>(pc + 3);
+            const int      tgt =
+                static_cast<int>(next) + static_cast<int8_t>(b2);
+            return hex8(b1) + "," + hex16(static_cast<uint16_t>(tgt & 0xFFFF));
+        }
     }
     return "";
 }

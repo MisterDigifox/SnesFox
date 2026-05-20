@@ -297,6 +297,15 @@ std::array<CpuOpcode, 256> buildCpuOpcodeTable() {
     return ops;
 }
 
+std::array<CpuOpcode, 256> buildApuOpcodeTable() {
+    std::array<CpuOpcode, 256> ops{};
+    ops.fill(makeUnknown());
+    // Rows generated from Sony/SNESDev SPC opcode list (ASL !abs fixes duplicate CC typo):
+    //   python3 tools/gen_apu_opcodes_cpp.py path/to/spc700_apu_manual.txt > spc700_opcode_setops.inc
+#include "spc700_opcode_setops.inc"
+    return ops;
+}
+
 } // namespace
 
 void printMissingCpuOpcodes(const std::array<CpuOpcode, 256>& ops) {
@@ -323,3 +332,4 @@ void printMissingCpuOpcodes(const std::array<CpuOpcode, 256>& ops) {
 }
 
 const std::array<CpuOpcode, 256> cpuOpcodesTable = buildCpuOpcodeTable();
+const std::array<CpuOpcode, 256> apuOpcodesTable = buildApuOpcodeTable();
