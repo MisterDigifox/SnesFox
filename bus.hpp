@@ -41,6 +41,8 @@ public:
     void setJoy1(uint16_t state);
     Ppu& ppu() { return m_ppu; }
     const Ppu& ppu() const { return m_ppu; }
+    APU& apu() { return m_apu; }
+    const APU& apu() const { return m_apu; }
 
 private:
     const std::vector<uint8_t>& m_rom;

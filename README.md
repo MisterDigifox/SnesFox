@@ -84,6 +84,8 @@ Designed to round-trip the assembler text produced by `disasm` for supported dum
 
 Opens the debug window (pause, single-step).
 
+**APU I/O stubs:** There is no SPC700 yet; `$2140`–`$2143` use an echo stub. Reset matches typical IPL/handshake tooling by presenting **`$AA` at `$2140` and `$BB` at `$2141`**, so a 16‑bit read at `$2140` yields **`$BBAA`**. Rare ROMs that first wait until those ports read as zero can set **`SNESFOX_APU_PORTS_ZERO=1`** before launch.
+
 ## Preview
 
 ![snesfox emulator preview](preview/preview.png)

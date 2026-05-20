@@ -205,9 +205,11 @@ uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
         }
     }
 
-    // APU I/O ports ($2140-$2143)
-    if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) &&
-        addr >= 0x2140 && addr <= 0x2143) {
+    // APU I/O ports ($2140-$2143) — same idea as PPU $2100-$213F above: decoding is by offset
+    // inside the SNES register window, not restricted to a CPU bank mask. Absolute reads use DB;
+    // after PHK/PLB DB is often the cartridge bank ($40‑$7D), so rejecting those banks routed
+    // CMP/LDA $2140 to ROM and stalled spcBoot handshakes.
+    if (addr >= 0x2140 && addr <= 0x2143) {
         return m_apu.readPort(addr);
     }
 
@@ -340,10 +342,8 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     }
 
     // ------------------------------------------------------------
-    // APU I/O ports ($2140-$2143)
-    // ------------------------------------------------------------
-    if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) &&
-        addr >= 0x2140 && addr <= 0x2143) {
+    // APU I/O ports ($2140-$2143) — see read(); must not require bank ∈ {$00‑$3F,$80‑$BF}.
+    if (addr >= 0x2140 && addr <= 0x2143) {
         m_apu.writePort(addr, value);
         return;
     }
