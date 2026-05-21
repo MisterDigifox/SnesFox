@@ -120,10 +120,7 @@ void applySEP(uint8_t mask, uint8_t& p, uint16_t& x, uint16_t& y) {
 }
 
 void applyRegisterSizesFromP(uint8_t p, uint16_t& a, uint16_t& x, uint16_t& y) {
-    if (flagSet(p, FLAG_M)) {
-        a &= 0x00FF;
-    }
-
+    (void)a;
     if (flagSet(p, FLAG_X)) {
         x &= 0x00FF;
         y &= 0x00FF;

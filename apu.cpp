@@ -13,6 +13,12 @@ constexpr std::array<uint8_t, 64> kIplRom = {
 
 inline bool iplRomOn(uint8_t f1) { return (f1 & 0x80) != 0; }
 
+inline uint16_t timerPeriod(size_t i) { return i == 2 ? 16 : 128; }
+
+inline uint16_t timerTarget(uint8_t target) {
+    return target == 0 ? 0x100 : static_cast<uint16_t>(target);
+}
+
 } // namespace
 
 void APU::reset() {
@@ -20,6 +26,9 @@ void APU::reset() {
     m_sdsp.reset();
     m_cpuToSpc.fill(0);
     m_spcToCpu.fill(0);
+    m_timerStage.fill(0);
+    m_timerPrescale.fill(0);
+    m_timerOut.fill(0);
     m_spcSched = 0;
 
     // CONTROL ($F1): bit 7 maps IPL ROM at $FFC0-$FFFF; hardware comes out of reset with ROM on.
@@ -45,12 +54,15 @@ void APU::writePort(uint16_t addr, uint8_t value) {
     const size_t i = static_cast<size_t>(addr - 0x2140);
     if (i >= 4) return;
     m_cpuToSpc[i] = value;
-    // Instant echo: CPU read side tracks last CPU write until the SPC overwrites
-    // via $F4-$F7 (upload polls on $2140 otherwise stay on $00 forever).
-    m_spcToCpu[i] = value;
+    // Port 0 is the IPL upload acknowledge byte and must stay SPC-driven.
+    // Data/control ports are locally readable by CPU-side upload routines that
+    // poll $2140 as a 16-bit word while the IPL only updates $F4.
+    if (i != 0) {
+        m_spcToCpu[i] = value;
+    }
 }
 
-uint8_t APU::spcPeek(uint16_t addr) const {
+uint8_t APU::spcPeek(uint16_t addr) {
     // $00F2: DSP register address latch (readable/writable).
     if (addr == 0x00F2) {
         return m_sdsp.addressLatch();
@@ -65,12 +77,37 @@ uint8_t APU::spcPeek(uint16_t addr) const {
     if (addr >= 0x00F4 && addr <= 0x00F7) {
         return m_cpuToSpc[static_cast<size_t>(addr - 0x00F4)];
     }
+    if (addr >= 0x00FD && addr <= 0x00FF) {
+        const size_t i = static_cast<size_t>(addr - 0x00FD);
+        const uint8_t value = m_timerOut[i] & 0x0F;
+        m_timerOut[i] = 0;
+        m_ram[addr] = 0;
+        return value;
+    }
     return m_ram[addr];
 }
 
 void APU::spcPoke(uint16_t addr, uint8_t v) {
     if (addr == 0x00F1) {
+        const uint8_t old = m_ram[0x00F1];
         m_ram[0x00F1] = v;
+        for (size_t i = 0; i < 3; ++i) {
+            const uint8_t bit = static_cast<uint8_t>(1u << i);
+            if ((v & bit) != 0 && (old & bit) == 0) {
+                m_timerStage[i] = 0;
+                m_timerPrescale[i] = 0;
+                m_timerOut[i] = 0;
+                m_ram[0x00FD + i] = 0;
+            }
+        }
+        if ((v & 0x10) != 0) {
+            m_cpuToSpc[0] = 0;
+            m_cpuToSpc[1] = 0;
+        }
+        if ((v & 0x20) != 0) {
+            m_cpuToSpc[2] = 0;
+            m_cpuToSpc[3] = 0;
+        }
         return;
     }
     if (addr == 0x00F2) {
@@ -89,6 +126,25 @@ void APU::spcPoke(uint16_t addr, uint8_t v) {
     }
 }
 
+void APU::runTimers(uint32_t spcCycles) {
+    const uint8_t control = m_ram[0x00F1];
+    for (size_t i = 0; i < 3; ++i) {
+        if ((control & (1u << i)) == 0) continue;
+
+        m_timerPrescale[i] = static_cast<uint16_t>(m_timerPrescale[i] + spcCycles);
+        const uint16_t period = timerPeriod(i);
+        while (m_timerPrescale[i] >= period) {
+            m_timerPrescale[i] = static_cast<uint16_t>(m_timerPrescale[i] - period);
+            ++m_timerStage[i];
+            if (m_timerStage[i] >= timerTarget(m_ram[0x00FA + i])) {
+                m_timerStage[i] = 0;
+                m_timerOut[i] = static_cast<uint8_t>((m_timerOut[i] + 1u) & 0x0F);
+                m_ram[0x00FD + i] = m_timerOut[i];
+            }
+        }
+    }
+}
+
 void APU::runSpc712(uint64_t cpuDelta) {
     if (cpuDelta == 0 || m_spc.halted()) return;
 
@@ -96,6 +152,7 @@ void APU::runSpc712(uint64_t cpuDelta) {
 
     while (m_spcSched >= 0 && !m_spc.halted()) {
         const uint32_t spcCyc = m_spc.step(*this);
+        runTimers(spcCyc);
         m_sdsp.runClocks(static_cast<int>(spcCyc));
         const int64_t debit = static_cast<int64_t>(spcCyc) * 12;
         m_spcSched -= debit;

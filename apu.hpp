@@ -19,11 +19,12 @@ public:
     // Advance the SPC700 in lock-step with SNES CPU cycles consumed since last call.
     void step(uint64_t cpuCyclesSinceLast);
 
-    uint8_t spcPeek(uint16_t addr) const;
+    uint8_t spcPeek(uint16_t addr);
     void    spcPoke(uint16_t addr, uint8_t value);
 
 private:
     void runSpc712(uint64_t cpuDelta);
+    void runTimers(uint32_t spcCycles);
 
     Spc700 m_spc{};
     std::array<uint8_t, 65536> m_ram{};
@@ -36,4 +37,9 @@ private:
 
     // Fractional SPC scheduling (carry-scaled CPU vs SPC cycle ratio ≈ 12:7).
     int64_t m_spcSched{};
+
+    // SPC timer state for $FA-$FC targets and $FD-$FF 4-bit output counters.
+    std::array<uint16_t, 3> m_timerStage{};
+    std::array<uint16_t, 3> m_timerPrescale{};
+    std::array<uint8_t, 3>  m_timerOut{};
 };
