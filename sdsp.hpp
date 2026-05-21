@@ -3,12 +3,19 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 /// Sony SNES S-DSP: 128-byte register file and IO as seen via SPC `$F2`/`$F3`.
 /// PCM generation (BRR, Gaussian mix, …) can be layered on top of [[runClocks]] later.
 class Sdsp {
 public:
     static constexpr int kRegisters = 128;
+    static constexpr int kVoices    = 8;
+
+    struct PcmFrame {
+        int16_t left{};
+        int16_t right{};
+    };
 
     /// Global register indices (voices use 16-byte stride: base + voice*0x10 + offset).
     static constexpr int r_mvoll = 0x0C;
@@ -38,13 +45,39 @@ public:
     [[nodiscard]] uint8_t readReg(int addr) const;
     void                    writeReg(int addr, uint8_t value);
 
-    /// Advance emulation by `dspClocks` at 1.024 MHz; hook point for PCM pipeline.
-    void runClocks(int dspClocks);
+    /// Advance emulation by `dspClocks` at 1.024 MHz and mix decoded BRR voices.
+    void runClocks(int dspClocks, const std::array<uint8_t, 65536>& aram);
+
+    [[nodiscard]] size_t availableSamples() const { return m_pcm.size(); }
+    size_t popSamples(PcmFrame* out, size_t maxFrames);
 
     [[nodiscard]] const std::array<uint8_t, kRegisters>& registers() const { return m_regs; }
 
 private:
+    struct Voice {
+        bool active = false;
+        uint16_t brrAddr = 0;
+        uint16_t loopAddr = 0;
+        uint16_t pitchCounter = 0;
+        uint8_t sampleIndex = 0;
+        uint8_t brrHeader = 0;
+        int16_t prev1 = 0;
+        int16_t prev2 = 0;
+        std::array<int16_t, 16> decoded{};
+    };
+
+    void keyOn(uint8_t mask, const std::array<uint8_t, 65536>& aram);
+    void keyOff(uint8_t mask);
+    void decodeBlock(size_t voiceIndex, const std::array<uint8_t, 65536>& aram);
+    void advanceVoice(size_t voiceIndex, const std::array<uint8_t, 65536>& aram);
+    void mixOneSample(const std::array<uint8_t, 65536>& aram);
+
     std::array<uint8_t, kRegisters> m_regs{};
     uint8_t                         m_addressLatch{};
     uint8_t                         m_lastDataPortByte{};
+    std::array<Voice, kVoices>      m_voices{};
+    std::vector<PcmFrame>           m_pcm{};
+    int                             m_clockRemainder{};
+    uint8_t                         m_pendingKon{};
+    uint8_t                         m_pendingKoff{};
 };

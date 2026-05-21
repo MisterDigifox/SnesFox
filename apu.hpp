@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "sdsp.hpp"
@@ -18,6 +19,9 @@ public:
 
     // Advance the SPC700 in lock-step with SNES CPU cycles consumed since last call.
     void step(uint64_t cpuCyclesSinceLast);
+
+    [[nodiscard]] size_t availableAudioSamples() const { return m_sdsp.availableSamples(); }
+    size_t popAudioSamples(Sdsp::PcmFrame* out, size_t maxFrames);
 
     uint8_t spcPeek(uint16_t addr);
     void    spcPoke(uint16_t addr, uint8_t value);

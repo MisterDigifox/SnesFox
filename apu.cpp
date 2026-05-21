@@ -62,6 +62,10 @@ void APU::writePort(uint16_t addr, uint8_t value) {
     }
 }
 
+size_t APU::popAudioSamples(Sdsp::PcmFrame* out, size_t maxFrames) {
+    return m_sdsp.popSamples(out, maxFrames);
+}
+
 uint8_t APU::spcPeek(uint16_t addr) {
     // $00F2: DSP register address latch (readable/writable).
     if (addr == 0x00F2) {
@@ -153,7 +157,7 @@ void APU::runSpc712(uint64_t cpuDelta) {
     while (m_spcSched >= 0 && !m_spc.halted()) {
         const uint32_t spcCyc = m_spc.step(*this);
         runTimers(spcCyc);
-        m_sdsp.runClocks(static_cast<int>(spcCyc));
+        m_sdsp.runClocks(static_cast<int>(spcCyc), m_ram);
         const int64_t debit = static_cast<int64_t>(spcCyc) * 12;
         m_spcSched -= debit;
     }
