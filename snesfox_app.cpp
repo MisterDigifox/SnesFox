@@ -1,6 +1,7 @@
 #include "snesfox_app.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <deque>
@@ -28,6 +29,10 @@
 namespace {
 
 constexpr uint64_t CYCLES_PER_FRAME = Bus::kCyclesPerFrame;
+constexpr int AUDIO_SAMPLE_RATE = 32000;
+constexpr int AUDIO_CHANNELS = 2;
+constexpr int AUDIO_QUEUE_LOW_FRAMES = AUDIO_SAMPLE_RATE / 30;
+constexpr int AUDIO_QUEUE_MAX_FRAMES = AUDIO_SAMPLE_RATE / 4;
 
 uint16_t sampleJoy1() {
     SDL_PumpEvents();
@@ -78,6 +83,81 @@ inline void advanceCpuScheduling(Bus& bus, CPU& cpu, bool updateJoyOnNmi) {
     }
     bus.syncWaiAfterVblankEdge(cpu);
 }
+
+class AudioOutput {
+public:
+    AudioOutput() {
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
+            std::cerr << "SDL audio disabled: " << SDL_GetError() << "\n";
+            return;
+        }
+
+        SDL_AudioSpec want{};
+        want.freq = AUDIO_SAMPLE_RATE;
+        want.format = AUDIO_S16SYS;
+        want.channels = AUDIO_CHANNELS;
+        want.samples = 1024;
+
+        SDL_AudioSpec have{};
+        m_device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (m_device == 0) {
+            std::cerr << "SDL audio disabled: " << SDL_GetError() << "\n";
+            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+            return;
+        }
+        if (have.freq != want.freq || have.format != want.format || have.channels != want.channels) {
+            std::cerr << "SDL audio disabled: unsupported device format\n";
+            SDL_CloseAudioDevice(m_device);
+            m_device = 0;
+            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+            return;
+        }
+
+        SDL_PauseAudioDevice(m_device, 0);
+    }
+
+    ~AudioOutput() {
+        if (m_device != 0) {
+            SDL_CloseAudioDevice(m_device);
+            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        }
+    }
+
+    AudioOutput(const AudioOutput&) = delete;
+    AudioOutput& operator=(const AudioOutput&) = delete;
+
+    void setPaused(bool paused) {
+        if (m_device == 0) return;
+        SDL_PauseAudioDevice(m_device, paused ? 1 : 0);
+        if (paused) {
+            SDL_ClearQueuedAudio(m_device);
+        }
+    }
+
+    void pump(APU& apu) {
+        if (m_device == 0) return;
+
+        const uint32_t queuedBytes = SDL_GetQueuedAudioSize(m_device);
+        const uint32_t frameBytes = static_cast<uint32_t>(sizeof(Sdsp::PcmFrame));
+        const uint32_t queuedFrames = queuedBytes / frameBytes;
+        if (queuedFrames > AUDIO_QUEUE_MAX_FRAMES) {
+            SDL_ClearQueuedAudio(m_device);
+        }
+        if (queuedFrames >= AUDIO_QUEUE_LOW_FRAMES) return;
+
+        std::array<Sdsp::PcmFrame, 2048> frames{};
+        const size_t n = apu.popAudioSamples(frames.data(), frames.size());
+        if (n == 0) return;
+
+        const uint32_t bytes = static_cast<uint32_t>(n * sizeof(Sdsp::PcmFrame));
+        if (SDL_QueueAudio(m_device, frames.data(), bytes) != 0) {
+            std::cerr << "SDL_QueueAudio failed: " << SDL_GetError() << "\n";
+        }
+    }
+
+private:
+    SDL_AudioDeviceID m_device = 0;
+};
 
 std::string trimCopy(std::string s) {
     auto notSpace = [](unsigned char c) { return !std::isspace(c); };
@@ -518,6 +598,7 @@ int runEmu(const std::string& romPath) {
 
     Display display("snesfox");
     display.setFixedPanelLineCount(pausedEmuPanelLineCount(headerLines.size()));
+    AudioOutput audio;
 
     bool running = true;
     while (running) {
@@ -526,6 +607,7 @@ int runEmu(const std::string& romPath) {
 
         if (action == DebugAction::TogglePause) {
             paused = !paused;
+            audio.setPaused(paused);
         }
         if (action == DebugAction::StepOne && paused) {
             stepOnce = true;
@@ -538,6 +620,7 @@ int runEmu(const std::string& romPath) {
                 cpu.step(bus);
                 advanceCpuScheduling(bus, cpu, true);
             }
+            audio.pump(bus.apu());
         } else if (stepOnce) {
             stepOnce = false;
 

@@ -54,12 +54,8 @@ void APU::writePort(uint16_t addr, uint8_t value) {
     const size_t i = static_cast<size_t>(addr - 0x2140);
     if (i >= 4) return;
     m_cpuToSpc[i] = value;
-    // Port 0 is the IPL upload acknowledge byte and must stay SPC-driven.
-    // Data/control ports are locally readable by CPU-side upload routines that
-    // poll $2140 as a 16-bit word while the IPL only updates $F4.
-    if (i != 0) {
-        m_spcToCpu[i] = value;
-    }
+    // CPU writes update only the SPC-visible input ports. CPU reads return the
+    // independent SPC output ports written through $F4-$F7.
 }
 
 size_t APU::popAudioSamples(Sdsp::PcmFrame* out, size_t maxFrames) {
