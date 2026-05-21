@@ -17,7 +17,7 @@ inline bool iplRomOn(uint8_t f1) { return (f1 & 0x80) != 0; }
 
 void APU::reset() {
     m_ram.fill(0);
-    m_dspRegs.fill(0);
+    m_sdsp.reset();
     m_cpuToSpc.fill(0);
     m_spcToCpu.fill(0);
     m_spcSched = 0;
@@ -53,11 +53,11 @@ void APU::writePort(uint16_t addr, uint8_t value) {
 uint8_t APU::spcPeek(uint16_t addr) const {
     // $00F2: DSP register address latch (readable/writable).
     if (addr == 0x00F2) {
-        return m_ram[0x00F2];
+        return m_sdsp.addressLatch();
     }
     // $00F3: read selected DSP register (address = `$F2 & 0x7F`).
     if (addr == 0x00F3) {
-        return m_dspRegs[static_cast<size_t>(m_ram[0x00F2] & 0x7Fu)];
+        return m_sdsp.peekDataPort();
     }
     if (addr >= 0xFFC0 && iplRomOn(m_ram[0x00F1])) {
         return kIplRom[addr - 0xFFC0];
@@ -74,17 +74,13 @@ void APU::spcPoke(uint16_t addr, uint8_t v) {
         return;
     }
     if (addr == 0x00F2) {
+        m_sdsp.setAddressLatch(v);
         m_ram[0x00F2] = v;
         return;
     }
     if (addr == 0x00F3) {
-        const size_t ri = static_cast<size_t>(m_ram[0x00F2] & 0x7Fu);
-        if (ri == 0x7C) {
-            m_dspRegs[0x7C] = 0; // ENDX: clear on any write (hardware)
-        } else {
-            m_dspRegs[ri] = v;
-        }
-        m_ram[0x00F3] = v;
+        m_sdsp.pokeDataPort(v);
+        m_ram[0x00F3] = m_sdsp.lastDataPortWrite();
         return;
     }
     m_ram[addr] = v;
@@ -100,7 +96,8 @@ void APU::runSpc712(uint64_t cpuDelta) {
 
     while (m_spcSched >= 0 && !m_spc.halted()) {
         const uint32_t spcCyc = m_spc.step(*this);
-        const int64_t debit   = static_cast<int64_t>(spcCyc) * 12;
+        m_sdsp.runClocks(static_cast<int>(spcCyc));
+        const int64_t debit = static_cast<int64_t>(spcCyc) * 12;
         m_spcSched -= debit;
     }
 }
