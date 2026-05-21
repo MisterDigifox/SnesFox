@@ -17,6 +17,7 @@ inline bool iplRomOn(uint8_t f1) { return (f1 & 0x80) != 0; }
 
 void APU::reset() {
     m_ram.fill(0);
+    m_dspRegs.fill(0);
     m_cpuToSpc.fill(0);
     m_spcToCpu.fill(0);
     m_spcSched = 0;
@@ -50,16 +51,19 @@ void APU::writePort(uint16_t addr, uint8_t value) {
 }
 
 uint8_t APU::spcPeek(uint16_t addr) const {
+    // $00F2: DSP register address latch (readable/writable).
+    if (addr == 0x00F2) {
+        return m_ram[0x00F2];
+    }
+    // $00F3: read selected DSP register (address = `$F2 & 0x7F`).
+    if (addr == 0x00F3) {
+        return m_dspRegs[static_cast<size_t>(m_ram[0x00F2] & 0x7Fu)];
+    }
     if (addr >= 0xFFC0 && iplRomOn(m_ram[0x00F1])) {
         return kIplRom[addr - 0xFFC0];
     }
     if (addr >= 0x00F4 && addr <= 0x00F7) {
         return m_cpuToSpc[static_cast<size_t>(addr - 0x00F4)];
-    }
-    // S-DSP not emulated: treat DSP data port as always idle so SPC code that
-    // busy-waits on $F3 does not wedge (would block handshakes with the main CPU).
-    if (addr == 0x00F3) {
-        return 0;
     }
     return m_ram[addr];
 }
@@ -69,14 +73,23 @@ void APU::spcPoke(uint16_t addr, uint8_t v) {
         m_ram[0x00F1] = v;
         return;
     }
+    if (addr == 0x00F2) {
+        m_ram[0x00F2] = v;
+        return;
+    }
+    if (addr == 0x00F3) {
+        const size_t ri = static_cast<size_t>(m_ram[0x00F2] & 0x7Fu);
+        if (ri == 0x7C) {
+            m_dspRegs[0x7C] = 0; // ENDX: clear on any write (hardware)
+        } else {
+            m_dspRegs[ri] = v;
+        }
+        m_ram[0x00F3] = v;
+        return;
+    }
     m_ram[addr] = v;
     if (addr >= 0x00F4 && addr <= 0x00F7) {
         m_spcToCpu[static_cast<size_t>(addr - 0x00F4)] = v;
-    }
-    // DSP writes complete "immediately" with no S-DSP model; RAM mirror stays 0
-    // so any poll of $F3 after a transfer sees an idle port (matches spcPeek).
-    if (addr == 0x00F3) {
-        m_ram[0x00F3] = 0;
     }
 }
 
