@@ -20,12 +20,22 @@ constexpr int FONT_PT = scale23(16); // rounded from previous 16px
 constexpr int TEXT_PANEL_X         = GAME_DST_W + scale23(4);
 constexpr int TEXT_PANEL_RIGHT_PAD = scale23(12);
 
-constexpr SDL_Color TEXT_COLOR{255, 255, 255, 255};
+constexpr SDL_Color TEXT_COLOR{222, 222, 222, 255};
 constexpr SDL_Color BG_COLOR{0, 0, 0, 255};
+constexpr SDL_Color PANEL_BG_COLOR{16, 17, 20, 255};
+constexpr SDL_Color DIVIDER_COLOR{58, 60, 66, 255};
+constexpr SDL_Color HEADER_COLOR{255, 178, 64, 255};
+constexpr SDL_Color LABEL_COLOR{140, 142, 150, 255};
+constexpr SDL_Color VALUE_COLOR{118, 214, 196, 255};
 constexpr int LINE_HEIGHT = scale23(18);
 constexpr int LEFT_MARGIN = scale23(12);
 constexpr int TOP_MARGIN  = scale23(12);
 constexpr int BOTTOM_PAD  = scale23(12);
+
+bool isSectionHeader(const std::string& line) {
+    return line.size() >= 8 && line.compare(0, 4, "=== ") == 0
+        && line.compare(line.size() - 4, 4, " ===") == 0;
+}
 
 // Representative longest lines from main.cpp debug UI (disasm log, PPU dump, ROM header).
 int maxProbeLinePixels(TTF_Font* font) {
@@ -147,14 +157,42 @@ void Display::setFixedPanelLineCount(std::size_t lineCount) {
 void Display::renderLines(const std::vector<std::string>& lines, int xOffset) {
     int y = TOP_MARGIN;
     for (const auto& line : lines) {
-        SDL_Surface* surface = TTF_RenderUTF8_Blended(m_font, line.c_str(), TEXT_COLOR);
-        if (!surface) continue;
-        SDL_Texture* texture = SDL_CreateTextureFromSurface(m_renderer, surface);
-        if (!texture) { SDL_FreeSurface(surface); continue; }
-        SDL_Rect dst{xOffset, y, surface->w, surface->h};
-        SDL_RenderCopy(m_renderer, texture, nullptr, &dst);
-        SDL_DestroyTexture(texture);
-        SDL_FreeSurface(surface);
+        if (line.empty()) {
+            y += LINE_HEIGHT;
+            continue;
+        }
+
+        auto drawText = [&](const std::string& text, int x, SDL_Color color) -> int {
+            if (text.empty()) return 0;
+            SDL_Surface* surface = TTF_RenderUTF8_Blended(m_font, text.c_str(), color);
+            if (!surface) return 0;
+            const int w = surface->w;
+            SDL_Texture* texture = SDL_CreateTextureFromSurface(m_renderer, surface);
+            if (texture) {
+                SDL_Rect dst{x, y, surface->w, surface->h};
+                SDL_RenderCopy(m_renderer, texture, nullptr, &dst);
+                SDL_DestroyTexture(texture);
+            }
+            SDL_FreeSurface(surface);
+            return w;
+        };
+
+        if (isSectionHeader(line)) {
+            TTF_SetFontStyle(m_font, TTF_STYLE_BOLD);
+            drawText(line, xOffset, HEADER_COLOR);
+            TTF_SetFontStyle(m_font, TTF_STYLE_NORMAL);
+        } else {
+            const auto sep = line.find(" : ");
+            if (sep != std::string::npos) {
+                const std::string label = line.substr(0, sep + 1);
+                const std::string value = line.substr(sep + 2);
+                const int labelW = drawText(label, xOffset, LABEL_COLOR);
+                drawText(value, xOffset + labelW + scale23(4), VALUE_COLOR);
+            } else {
+                drawText(line, xOffset, TEXT_COLOR);
+            }
+        }
+
         y += LINE_HEIGHT;
     }
 }
@@ -184,6 +222,12 @@ void Display::presentWithFrame(const uint32_t* pixels,
 
     SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
     SDL_RenderClear(m_renderer);
+
+    const SDL_Rect panelRect{GAME_DST_W, 0, m_windowWidth - GAME_DST_W, m_windowHeight};
+    SDL_SetRenderDrawColor(m_renderer, PANEL_BG_COLOR.r, PANEL_BG_COLOR.g, PANEL_BG_COLOR.b, PANEL_BG_COLOR.a);
+    SDL_RenderFillRect(m_renderer, &panelRect);
+    SDL_SetRenderDrawColor(m_renderer, DIVIDER_COLOR.r, DIVIDER_COLOR.g, DIVIDER_COLOR.b, DIVIDER_COLOR.a);
+    SDL_RenderDrawLine(m_renderer, GAME_DST_W, 0, GAME_DST_W, m_windowHeight);
 
     if (m_frameTex && pixels) {
         SDL_UpdateTexture(m_frameTex, nullptr, pixels, 256 * static_cast<int>(sizeof(uint32_t)));
