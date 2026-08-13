@@ -32,6 +32,14 @@ constexpr int LEFT_MARGIN = scale23(12);
 constexpr int TOP_MARGIN  = scale23(12);
 constexpr int BOTTOM_PAD  = scale23(12);
 
+constexpr int BUTTON_W = scale23(96);
+constexpr int BUTTON_H = scale23(28);
+constexpr int BUTTON_GAP_BELOW = scale23(10);
+constexpr int BUTTON_GAP_RIGHT = scale23(10);
+constexpr SDL_Color BUTTON_BG_COLOR{34, 36, 42, 255};
+constexpr SDL_Color BUTTON_BORDER_COLOR{95, 97, 105, 255};
+constexpr SDL_Color BUTTON_TEXT_COLOR{230, 230, 230, 255};
+
 bool isSectionHeader(const std::string& line) {
     return line.size() >= 8 && line.compare(0, 4, "=== ") == 0
         && line.compare(line.size() - 4, 4, " ===") == 0;
@@ -122,13 +130,17 @@ bool Display::processEvents(DebugAction& action) {
         if (event.type == SDL_QUIT) return false;
         if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
             switch (event.key.keysym.sym) {
-                case SDLK_RETURN:
-                case SDLK_KP_ENTER:
-                    action = DebugAction::TogglePause;
-                    break;
                 case SDLK_SPACE:
                     action = DebugAction::StepOne;
                     break;
+            }
+        }
+        if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+            const SDL_Point p{event.button.x, event.button.y};
+            if (SDL_PointInRect(&p, &m_pauseButtonRect)) {
+                action = DebugAction::TogglePause;
+            } else if (SDL_PointInRect(&p, &m_stepButtonRect)) {
+                action = DebugAction::StepOne;
             }
         }
     }
@@ -141,7 +153,8 @@ void Display::clear() {
 }
 
 void Display::applyPanelWindowHeight(std::size_t lineCount) {
-    const int textExtent = TOP_MARGIN + static_cast<int>(lineCount) * LINE_HEIGHT + BOTTOM_PAD;
+    const int textExtent = TOP_MARGIN + BUTTON_H + BUTTON_GAP_BELOW
+        + static_cast<int>(lineCount) * LINE_HEIGHT + BOTTOM_PAD;
     const int requiredH = std::max(MIN_WINDOW_HEIGHT, textExtent);
     if (requiredH != m_windowHeight) {
         SDL_SetWindowSize(m_window, m_windowWidth, requiredH);
@@ -154,8 +167,41 @@ void Display::setFixedPanelLineCount(std::size_t lineCount) {
     applyPanelWindowHeight(lineCount);
 }
 
-void Display::renderLines(const std::vector<std::string>& lines, int xOffset) {
-    int y = TOP_MARGIN;
+namespace {
+void drawButtonChrome(SDL_Renderer* renderer, TTF_Font* font, const SDL_Rect& rect, const std::string& label) {
+    SDL_SetRenderDrawColor(renderer, BUTTON_BG_COLOR.r, BUTTON_BG_COLOR.g, BUTTON_BG_COLOR.b, BUTTON_BG_COLOR.a);
+    SDL_RenderFillRect(renderer, &rect);
+    SDL_SetRenderDrawColor(renderer, BUTTON_BORDER_COLOR.r, BUTTON_BORDER_COLOR.g, BUTTON_BORDER_COLOR.b, BUTTON_BORDER_COLOR.a);
+    SDL_RenderDrawRect(renderer, &rect);
+
+    SDL_Surface* surface = TTF_RenderUTF8_Blended(font, label.c_str(), BUTTON_TEXT_COLOR);
+    if (!surface) return;
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (texture) {
+        const SDL_Rect dst{
+            rect.x + (rect.w - surface->w) / 2,
+            rect.y + (rect.h - surface->h) / 2,
+            surface->w, surface->h
+        };
+        SDL_RenderCopy(renderer, texture, nullptr, &dst);
+        SDL_DestroyTexture(texture);
+    }
+    SDL_FreeSurface(surface);
+}
+}
+
+void Display::drawPauseButton(bool paused) {
+    m_pauseButtonRect = SDL_Rect{TEXT_PANEL_X, TOP_MARGIN, BUTTON_W, BUTTON_H};
+    drawButtonChrome(m_renderer, m_font, m_pauseButtonRect, paused ? "Resume" : "Pause");
+}
+
+void Display::drawStepButton() {
+    m_stepButtonRect = SDL_Rect{TEXT_PANEL_X + BUTTON_W + BUTTON_GAP_RIGHT, TOP_MARGIN, BUTTON_W, BUTTON_H};
+    drawButtonChrome(m_renderer, m_font, m_stepButtonRect, "Step");
+}
+
+void Display::renderLines(const std::vector<std::string>& lines, int xOffset, int startY) {
+    int y = startY;
     for (const auto& line : lines) {
         if (line.empty()) {
             y += LINE_HEIGHT;
@@ -199,12 +245,13 @@ void Display::renderLines(const std::vector<std::string>& lines, int xOffset) {
 
 void Display::present(const std::vector<std::string>& lines) {
     applyPanelWindowHeight(lines.size());
-    renderLines(lines, LEFT_MARGIN);
+    renderLines(lines, LEFT_MARGIN, TOP_MARGIN);
     SDL_RenderPresent(m_renderer);
 }
 
 void Display::presentWithFrame(const uint32_t* pixels,
-                               const std::vector<std::string>& lines) {
+                               const std::vector<std::string>& lines,
+                               bool paused) {
     const std::size_t layoutLines =
         m_fixedPanelLineCount > 0 ? m_fixedPanelLineCount : lines.size();
     applyPanelWindowHeight(layoutLines);
@@ -236,7 +283,13 @@ void Display::presentWithFrame(const uint32_t* pixels,
         SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
     }
 
-    renderLines(lines, TEXT_PANEL_X);
+    drawPauseButton(paused);
+    if (paused) {
+        drawStepButton();
+    } else {
+        m_stepButtonRect = SDL_Rect{0, 0, 0, 0};
+    }
+    renderLines(lines, TEXT_PANEL_X, TOP_MARGIN + BUTTON_H + BUTTON_GAP_BELOW);
     SDL_RenderPresent(m_renderer);
 }
 

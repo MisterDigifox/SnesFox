@@ -22,11 +22,14 @@ public:
     void setFixedPanelLineCount(std::size_t lineCount);
     // Game frame (256×224 ARGB) on the left, debug text on the right
     void presentWithFrame(const uint32_t* pixels,
-                          const std::vector<std::string>& lines);
+                          const std::vector<std::string>& lines,
+                          bool paused);
     void delay(unsigned ms);
 private:
-    void renderLines(const std::vector<std::string>& lines, int xOffset);
+    void renderLines(const std::vector<std::string>& lines, int xOffset, int startY);
     void applyPanelWindowHeight(std::size_t lineCount);
+    void drawPauseButton(bool paused);
+    void drawStepButton();
 
     SDL_Window*   m_window      = nullptr;
     SDL_Renderer* m_renderer    = nullptr;
@@ -35,4 +38,6 @@ private:
     int           m_windowWidth = 0;
     int           m_windowHeight = 0; // last size sent to SDL
     std::size_t   m_fixedPanelLineCount = 0;
+    SDL_Rect      m_pauseButtonRect{0, 0, 0, 0}; // hit-test rect, set by drawPauseButton
+    SDL_Rect      m_stepButtonRect{0, 0, 0, 0};  // hit-test rect, only live while paused
 };

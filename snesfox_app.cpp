@@ -281,7 +281,7 @@ std::vector<std::string> makeDebugLines(
         lines.push_back("=== CPU (running) ===");
         lines.push_back(std::string("PC ") + hex24(cpu.pc24()) + "  " + cpu.instruction());
         lines.push_back("cycles " + std::to_string(cpu.cycles()));
-        lines.push_back("Enter: pause · Space: step (when paused)");
+        lines.push_back("Space: step (when paused)");
         return lines;
     }
 
@@ -725,7 +725,7 @@ int runEmu(const std::string& romPath) {
         }
 
         const auto lines = makeDebugLines(headerLines, cpu, bus.ppu(), instructionLog, paused);
-        display.presentWithFrame(bus.ppu().framebuffer(), lines);
+        display.presentWithFrame(bus.ppu().framebuffer(), lines, paused);
     }
 
     return 0;
