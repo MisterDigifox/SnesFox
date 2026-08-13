@@ -178,12 +178,49 @@ void testMosaicBlockHold() {
         "mosaic size 4: x=3 (last pixel in block) still inherits x=0's color");
 }
 
+// -----------------------------------------------------------------------
+// Regression test: WOBJSEL's color/math window nibble (bits 4-7) must use
+// the same area-low/enable-high bit order as every other window-enable
+// pair in this register family (W12SEL's BG1 and BG2 nibbles, and WOBJSEL's
+// own OBJ nibble in bits 0-3). It was previously read as enable-low/area-high,
+// silently disabling the color window whenever a ROM set only the enable bit
+// per the correct convention.
+// -----------------------------------------------------------------------
+void testColorWindowBitOrder() {
+    Ppu p;
+    p.reset();
+    p.writeReg(0x2100, 0x0F);
+    p.writeReg(0x2105, 0x01); // BG mode 1
+
+    writeSolidTile(p, 0x0000, 3);
+    fillTilemapWithTileZeroPal0(p, 0x1000, 1024);
+    writeCgram(p, 3, 0x001F); // BG pal0 color3 -> red
+
+    p.writeReg(0x2107, 0x10); // BG1SC: tilemap base $1000
+    p.writeReg(0x212C, 0x01); // TM: BG1 on main screen
+
+    p.writeReg(0x2126, 0);    // WH0 (window1 left)
+    p.writeReg(0x2127, 100);  // WH1 (window1 right) -> window1 = [0,100]
+    p.writeReg(0x2125, 0x20); // WOBJSEL: color window1 area=0(bit4), enable=1(bit5)
+    p.writeReg(0x2130, 0x40); // CGWSEL: force main black OUTSIDE the color window (mm=1)
+
+    p.renderScanline(50);
+
+    // CGWSEL mm=1 ("NotMathWin") forces black OUTSIDE the color window,
+    // so x=50 (inside [0,100]) stays unmodified and x=150 (outside) is black.
+    expectEq(p.framebuffer()[50 * 256 + 50], 0xFFF80000u,
+        "color window area/enable order: x=50 inside [0,100] shows BG1 unmodified");
+    expectEq(p.framebuffer()[50 * 256 + 150], 0xFF000000u,
+        "color window area/enable order: x=150 outside [0,100] forced black");
+}
+
 } // namespace
 
 int runPpuSelfTests() {
     testObjNameBaseAddressUnit();
     testWindowAreaPolarity();
     testMosaicBlockHold();
+    testColorWindowBitOrder();
 
     std::fprintf(stderr, "\n%d/%d checks passed\n", g_checks - g_failures, g_checks);
     return g_failures == 0 ? 0 : 1;

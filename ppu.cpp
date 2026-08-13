@@ -874,10 +874,11 @@ bool Ppu::windowMaskObj(int x) const {
 // colorWindowCombinedClip — color-window mask (WOBJSEL color bits + WOBJLOG 3:2)
 // -----------------------------------------------------------------------
 bool Ppu::colorWindowCombinedClip(int x) const {
-    const bool w1_en   = (m_wobjsel >> 4) & 1;
-    const bool w1_area = (m_wobjsel >> 5) & 1;
-    const bool w2_en   = (m_wobjsel >> 6) & 1;
-    const bool w2_area = (m_wobjsel >> 7) & 1;
+    // Same area/enable bit order as the OBJ nibble below it (bits 0-3): area low, enable high.
+    const bool w1_area = (m_wobjsel >> 4) & 1;
+    const bool w1_en   = (m_wobjsel >> 5) & 1;
+    const bool w2_area = (m_wobjsel >> 6) & 1;
+    const bool w2_en   = (m_wobjsel >> 7) & 1;
 
     if (!w1_en && !w2_en) return false;
 
@@ -903,10 +904,10 @@ bool Ppu::forceMainBlackFromColorWindow(int x) const {
     if (mm == 0) return false;
     if (mm == 3) return true;
 
-    const bool insideOpening = !colorWindowCombinedClip(x);
-    // MM=1 Outside — black outside the visible color-window opening.
-    // MM=2 Inside  — black inside the opening.
-    return (mm == 1u) ? !insideOpening : insideOpening;
+    const bool inMathWindow = colorWindowCombinedClip(x);
+    // MM=1 NotMathWin — black outside the color window.
+    // MM=2 MathWindow — black inside the color window.
+    return (mm == 1u) ? !inMathWindow : inMathWindow;
 }
 
 bool Ppu::forceSubTransparentFromColorWindow(int x) const {
@@ -914,8 +915,8 @@ bool Ppu::forceSubTransparentFromColorWindow(int x) const {
     if (ss == 0) return false;
     if (ss == 3) return true;
 
-    const bool insideOpening = !colorWindowCombinedClip(x);
-    return (ss == 1u) ? !insideOpening : insideOpening;
+    const bool inMathWindow = colorWindowCombinedClip(x);
+    return (ss == 1u) ? !inMathWindow : inMathWindow;
 }
 
 // -----------------------------------------------------------------------
