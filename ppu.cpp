@@ -703,9 +703,11 @@ void Ppu::renderSprites(int line, SpritePixel* out) const {
     const int sizeSet = (m_obsel >> 5) & 0x07;
 
     // Sprite CHR addressing: first name table base + gap to second table
-    // base (words) = (obsel & 7) << 12
+    // base (words) = (obsel & 7) << 13   (hardware base unit is 0x2000 words, not 0x1000 —
+    //   confirmed against SplitScrolling.sfc, whose sprite tiles sit at nameBase=$6000
+    //   for obsel&7=3; the <<12 form only ever coincided with fixture ROMs using base 0)
     // gap  (words) = (((obsel >> 3) & 3) + 1) << 12
-    const uint16_t nameBase = static_cast<uint16_t>((m_obsel & 0x07) << 12);
+    const uint16_t nameBase = static_cast<uint16_t>((m_obsel & 0x07) << 13);
     const uint16_t nameGap  = static_cast<uint16_t>((static_cast<uint16_t>((m_obsel >> 3) & 0x03) + 1u) << 12);
 
     // ---- Pass 1: collect up to 32 visible sprites ----
