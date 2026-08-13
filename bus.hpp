@@ -35,6 +35,12 @@ public:
     uint8_t read(uint8_t bank, uint16_t addr) const;
     void write(uint8_t bank, uint16_t addr, uint8_t value);
 
+    /// Memory-access speed in master-clock cycles (6=Fast, 8=Slow, 12=XSlow) for the given
+    /// address, per the SNES bus timing table — used to scale CPU cycle cost so that FastROM
+    /// ($420D bit0) actually speeds up execution instead of being ignored.
+    unsigned accessSpeedCycles(uint8_t bank, uint16_t addr) const;
+    bool fastRomEnabled() const { return m_fastRomEnabled; }
+
     RomMapping mapMode() const;
     size_t sramBytes() const;
     bool takePendingIrq();
@@ -98,6 +104,10 @@ private:
     // DMA / HDMA ($420C write-only latch)
     uint8_t m_dmaTraceCount = 0;
     uint8_t m_reg420c       = 0;
+
+    // MEMSEL ($420D) — bit0 selects FastROM (6-cycle) vs SlowROM (8-cycle) access
+    // for banks 00-3F/80-BF upper half and C0-FF.
+    bool m_fastRomEnabled = false;
 
     bool isLoRomArea(uint8_t bank, uint16_t addr) const;
     uint32_t loRomToFileOffset(uint8_t bank, uint16_t addr) const;

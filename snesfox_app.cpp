@@ -25,6 +25,7 @@
 #include "opcodes.hpp"
 #include "reasm.hpp"
 #include "rom.hpp"
+#include "tests/cpu_test.hpp"
 #include "tests/ppu_test.hpp"
 
 namespace {
@@ -74,19 +75,6 @@ uint16_t sampleJoy2() {
 }
 
 constexpr int LOG_SIZE = 4;
-
-// Total lines fed to Display in pause mode — must stay in sync with makeDebugLines(..., paused=true).
-inline std::size_t pausedEmuPanelLineCount(std::size_t romHeaderLines) {
-    constexpr std::size_t kTrailingPausedStructureLines =
-        15   // CPU Debug (=== CPU through Cycles)
-        + 2  // spacer + === PPU State ===
-        + 5  // VRam summary, SC/HOFS/VOFS/VMADDR, CHR@, TM@
-        + 5  // PAL0 header + 4 palette rows
-        + 2  // spacer + === Instruction Log ===
-        + static_cast<std::size_t>(LOG_SIZE);
-    constexpr std::size_t kSpacerAfterRomHeader = 1;
-    return romHeaderLines + kSpacerAfterRomHeader + kTrailingPausedStructureLines;
-}
 
 constexpr uint64_t DEFAULT_COV_FRAMES = 600;
 constexpr uint64_t COV_MAX_STEPS = 20000000ull;
@@ -268,42 +256,53 @@ std::string formatDisasmLine(uint32_t pc24, const CPU& cpu, bool isCurrent = fal
     return oss.str();
 }
 
-std::vector<std::string> makeDebugLines(
+// Splits a HeaderParser::toLines() block ("=== Title ===" + key/value lines) into a DebugSection.
+DebugSection headerLinesToSection(const std::vector<std::string>& headerLines) {
+    if (headerLines.empty()) return DebugSection{"ROM", {}};
+    std::string title = headerLines.front();
+    if (title.size() >= 8 && title.compare(0, 4, "=== ") == 0 && title.compare(title.size() - 4, 4, " ===") == 0) {
+        title = title.substr(4, title.size() - 8);
+    }
+    return DebugSection{title, {headerLines.begin() + 1, headerLines.end()}};
+}
+
+DebugPanel makeDebugPanel(
     const std::vector<std::string>& headerLines,
     const CPU& cpu,
     const Ppu& ppu,
     const std::deque<std::string>& instructionLog,
     bool paused
 ) {
-    std::vector<std::string> lines = headerLines;
-    lines.push_back("");
+    DebugPanel panel;
+    panel.sections.push_back(headerLinesToSection(headerLines));
+
     if (!paused) {
-        lines.push_back("=== CPU (running) ===");
-        lines.push_back(std::string("PC ") + hex24(cpu.pc24()) + "  " + cpu.instruction());
-        lines.push_back("cycles " + std::to_string(cpu.cycles()));
-        lines.push_back("Space: step (when paused)");
-        return lines;
+        panel.sections.push_back(DebugSection{"CPU (running)", {
+            std::string("PC ") + hex24(cpu.pc24()) + "  " + cpu.instruction(),
+            "cycles " + std::to_string(cpu.cycles()),
+            "Space: step (when paused)"
+        }});
+        return panel;
     }
 
-    lines.push_back("=== CPU Debug ===");
-    lines.push_back(std::string("State        : ") + (paused ? "PAUSED" : "RUNNING"));
-    lines.push_back("Reset Vector : " + hex16(cpu.resetVector()));
-    lines.push_back("Bank         : " + hex8(cpu.bank()));
-    lines.push_back("PC           : " + hex16(cpu.pc()));
-    lines.push_back("PC24         : " + hex24(cpu.pc24()));
-    lines.push_back("Opcode       : " + hex8(cpu.opcode()));
-    lines.push_back("Instruction  : " + cpu.instruction());
-    lines.push_back("P            : " + hex8(cpu.p()));
-    lines.push_back(std::string("M/X          : ") + (cpu.flagM() ? "M=8" : "M=16") + "  "
-                    + (cpu.flagX() ? "X=8" : "X=16"));
-    lines.push_back("A            : " + hex16(cpu.a()));
-    lines.push_back("X            : " + hex16(cpu.x()));
-    lines.push_back("Y            : " + hex16(cpu.y()));
-    lines.push_back("SP           : " + hex16(cpu.sp()));
-    lines.push_back("Cycles       : " + std::to_string(cpu.cycles()));
+    panel.sections.push_back(DebugSection{"CPU Debug", {
+        "State : PAUSED",
+        "Reset Vector : " + hex16(cpu.resetVector()),
+        "Bank : " + hex8(cpu.bank()),
+        "PC : " + hex16(cpu.pc()),
+        "PC24 : " + hex24(cpu.pc24()),
+        "Opcode : " + hex8(cpu.opcode()),
+        "Instruction : " + cpu.instruction(),
+        "P : " + hex8(cpu.p()),
+        std::string("M/X : ") + (cpu.flagM() ? "M=8" : "M=16") + "  " + (cpu.flagX() ? "X=8" : "X=16"),
+        "A : " + hex16(cpu.a()),
+        "X : " + hex16(cpu.x()),
+        "Y : " + hex16(cpu.y()),
+        "SP : " + hex16(cpu.sp()),
+        "Cycles : " + std::to_string(cpu.cycles())
+    }});
 
-    lines.push_back("");
-    lines.push_back("=== PPU State ===");
+    DebugSection ppuSection{"PPU State", {}};
     {
         const uint16_t chrBase = static_cast<uint16_t>((ppu.bgNBA12() & 0x0F) * 0x1000);
         const uint16_t tmBase = static_cast<uint16_t>((ppu.bgSC(0) >> 2) * 0x400);
@@ -313,7 +312,7 @@ std::vector<std::string> makeDebugLines(
             oss << "VWr:" << std::dec << ppu.vramWrites() << " FB:" << (ppu.forcedBlank() ? "ON" : "off")
                 << " M:" << static_cast<int>(ppu.bgMode()) << " TM:" << std::uppercase << std::hex
                 << std::setw(2) << std::setfill('0') << static_cast<int>(ppu.tm());
-            lines.push_back(oss.str());
+            ppuSection.lines.push_back(oss.str());
         }
         {
             std::ostringstream oss;
@@ -325,45 +324,38 @@ std::vector<std::string> makeDebugLines(
             } else {
                 oss << " H:" << std::dec << ppu.bgHOFS(0) << " V:" << ppu.bgVOFS(0);
             }
-            lines.push_back(oss.str());
+            ppuSection.lines.push_back(oss.str());
         }
         {
             std::ostringstream oss;
             oss << "VMADD:" << std::uppercase << std::hex << std::setw(4) << std::setfill('0')
                 << ppu.vramAddr();
-            lines.push_back(oss.str());
+            ppuSection.lines.push_back(oss.str());
         }
         {
             std::ostringstream oss;
             oss << "CHR@" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << chrBase << ":";
             for (int i = 0; i < 4; ++i)
                 oss << " " << std::setw(4) << vr[(chrBase + i) & 0x7FFF];
-            lines.push_back(oss.str());
+            ppuSection.lines.push_back(oss.str());
         }
         {
             std::ostringstream oss;
             oss << "TM@" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << tmBase << ":";
             for (int i = 0; i < 4; ++i)
                 oss << " " << std::setw(4) << vr[(tmBase + i) & 0x7FFF];
-            lines.push_back(oss.str());
+            ppuSection.lines.push_back(oss.str());
         }
     }
-    lines.push_back("PAL0(idx:BGR):");
-    for (int i = 0; i < 16; i += 4) {
-        std::ostringstream oss;
-        for (int j = 0; j < 4; ++j) {
-            oss << "[" << std::dec << (i + j) << "]" << std::uppercase << std::hex << std::setw(4)
-                << std::setfill('0') << ppu.cgram()[i + j] << " ";
-        }
-        lines.push_back(oss.str());
+    panel.sections.push_back(std::move(ppuSection));
+
+    panel.showPalette = true;
+    for (int i = 0; i < 16; ++i) {
+        panel.palette[i] = ppu.cgram()[i];
     }
 
-    lines.push_back("");
-    lines.push_back("=== Instruction Log ===");
-    for (const auto& line : instructionLog) {
-        lines.push_back(line);
-    }
-    return lines;
+    panel.instructionLog.assign(instructionLog.begin(), instructionLog.end());
+    return panel;
 }
 
 void printRomInfo(const Rom& rom, const std::vector<uint8_t>& data) {
@@ -684,7 +676,6 @@ int runEmu(const std::string& romPath) {
     bool nextFrameOnce = false;
 
     Display display("snesfox");
-    display.setFixedPanelLineCount(pausedEmuPanelLineCount(headerLines.size()));
     AudioOutput audio;
 
     // Pace the loop to the SNES's real NTSC refresh rate rather than running
@@ -699,6 +690,12 @@ int runEmu(const std::string& romPath) {
     while (running) {
         DebugAction action = DebugAction::None;
         running = display.processEvents(action);
+
+        display.beginFrame();
+        const DebugAction uiAction = display.drawControls(paused);
+        if (uiAction != DebugAction::None) {
+            action = uiAction;
+        }
 
         if (action == DebugAction::TogglePause) {
             paused = !paused;
@@ -744,8 +741,8 @@ int runEmu(const std::string& romPath) {
             }
         }
 
-        const auto lines = makeDebugLines(headerLines, cpu, bus.ppu(), instructionLog, paused);
-        display.presentWithFrame(bus.ppu().framebuffer(), lines, paused);
+        const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), instructionLog, paused);
+        display.presentWithFrame(bus.ppu().framebuffer(), panel);
 
         const uint64_t frameEndPerf = SDL_GetPerformanceCounter();
         const double elapsedMs = static_cast<double>(frameEndPerf - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
@@ -774,7 +771,9 @@ void printUsage() {
 
 int SnesFoxApp::run(int argc, char** argv) {
     if (argc >= 2 && std::string(argv[1]) == "selftest") {
-        return runPpuSelfTests();
+        const int ppuResult = runPpuSelfTests();
+        const int cpuResult = runCpuSelfTests();
+        return (ppuResult == 0 && cpuResult == 0) ? 0 : 1;
     }
 
     if (argc < 3) {

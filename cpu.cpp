@@ -727,6 +727,9 @@ void CPU::step(Bus& bus) {
         return;
     }
 
+    const uint8_t fetchBank = m_bank;
+    const uint16_t fetchPc  = m_pc;
+
     m_opcode = bus.read(m_bank, m_pc);
 
     const uint8_t b0 = m_opcode;
@@ -3296,7 +3299,12 @@ void CPU::step(Bus& bus) {
         m_pc = static_cast<uint16_t>(m_pc + size);
     }
 
-    m_cycles += cpuOpcodesTable[m_opcode].cyclesNumber;
+    // cyclesNumber assumes the flat 8-cycle ("Slow") bus baseline; rescale by the speed of
+    // the region the opcode itself was fetched from so FastROM ($420D) actually speeds
+    // things up. (Individual operand/data accesses elsewhere aren't separately timed.)
+    const uint64_t baseCycles = cpuOpcodesTable[m_opcode].cyclesNumber;
+    const unsigned fetchSpeed = bus.accessSpeedCycles(fetchBank, fetchPc);
+    m_cycles += (fetchSpeed == 8) ? baseCycles : (baseCycles * fetchSpeed + 4) / 8;
 }
 
 void CPU::wakeFromWaiSilently() {

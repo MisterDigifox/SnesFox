@@ -173,6 +173,24 @@ uint32_t Bus::hiRomToFileOffset(uint8_t bank, uint16_t addr) const {
          + static_cast<uint32_t>(addr);
 }
 
+// SNES bus timing table (master-clock cycles per access): 6=Fast, 8=Slow, 12=XSlow.
+// Banks 40-7D and 7E-7F are always Slow regardless of MEMSEL. Banks 00-3F/80-BF split
+// by address (WRAM mirror/registers/ROM upper half); banks C0-FF are ROM, gated by
+// FastROM the same as the 00-3F/80-BF upper half.
+unsigned Bus::accessSpeedCycles(uint8_t bank, uint16_t addr) const {
+    if (bank == 0x7E || bank == 0x7F) return 8;
+    if (bank >= 0x40 && bank <= 0x7D) return 8;
+    if (bank >= 0xC0) return m_fastRomEnabled ? 6 : 8;
+
+    // Banks 00-3F / 80-BF
+    if (addr <= 0x1FFF) return 8;
+    if (addr <= 0x3FFF) return 6;
+    if (addr <= 0x41FF) return 12;
+    if (addr <= 0x5FFF) return 6;
+    if (addr <= 0x7FFF) return 8;
+    return m_fastRomEnabled ? 6 : 8; // 8000-FFFF
+}
+
 uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
     // ------------------------------------------------------------
     // WRAM full banks
@@ -403,6 +421,12 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     // HDMA channel enable ($420C): which channels use HDMA next frame (see beginHdmaFrame on V=0)
     if (addr == 0x420C) {
         m_reg420c = value;
+        return;
+    }
+
+    // MEMSEL ($420D): bit0 = FastROM enable
+    if (addr == 0x420D) {
+        m_fastRomEnabled = (value & 0x01) != 0;
         return;
     }
 
