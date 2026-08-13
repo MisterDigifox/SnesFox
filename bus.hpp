@@ -39,6 +39,7 @@ public:
     size_t sramBytes() const;
     bool takePendingIrq();
     void setJoy1(uint16_t state);
+    void setJoy2(uint16_t state);
     Ppu& ppu() { return m_ppu; }
     const Ppu& ppu() const { return m_ppu; }
     APU& apu() { return m_apu; }
@@ -79,6 +80,7 @@ private:
 
     // Joypad
     uint16_t m_joy1 = 0;
+    uint16_t m_joy2 = 0;
 
     // SRAM
     std::vector<uint8_t> m_sram;
