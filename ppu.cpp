@@ -634,6 +634,12 @@ void Ppu::renderBg(int bg, int bpp, int line, LayerPixel* out) const {
     const uint16_t vofs       = m_bgVOFS[bg] & 0x3FF;
     const uint16_t chr        = chrBase(bg);
 
+    // $2106 MOSAIC — bits7-4 shared block size (N+1 pixels), bits3-0 per-BG enable.
+    // Enabled BGs sample every Nth row/column and hold that value across the block.
+    const bool mosaicOn   = (m_mosaic >> bg) & 1;
+    const int  mosaicSize = mosaicOn ? (((m_mosaic >> 4) & 0x0F) + 1) : 1;
+    const int  mosaicLine = (mosaicSize > 1) ? (line - (line % mosaicSize)) : line;
+
     // CGRAM palette stride per bpp
     const int palStride = (bpp == 2) ? 4 : (bpp == 4) ? 16 : 256;
     // Mode 0 — four 2bpp BGs partition CGRAM indices 0..127 into four 32-color banks
@@ -641,12 +647,13 @@ void Ppu::renderBg(int bg, int bpp, int line, LayerPixel* out) const {
     const uint16_t mode0PalBase =
         (m_bgMode == 0 && bpp == 2) ? static_cast<uint16_t>(bg * 32) : uint16_t(0);
 
-    const int effY    = (line + static_cast<int>(vofs)) & 0x3FF;
+    const int effY    = (mosaicLine + static_cast<int>(vofs)) & 0x3FF;
     const int tileRow = effY / tileSz;                  // coarse tile row in tilemap
     const int fineYt  = effY % tileSz;                  // pixel row within the tile cell
 
     for (int x = 0; x < 256; ++x) {
-        const int effX    = (x + static_cast<int>(hofs)) & 0x3FF;
+        const int sampleX = (mosaicSize > 1) ? (x - (x % mosaicSize)) : x;
+        const int effX    = (sampleX + static_cast<int>(hofs)) & 0x3FF;
         const int tileCol = effX / tileSz;
         const int fineXt  = effX % tileSz;
 
