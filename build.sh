@@ -2,7 +2,8 @@ rm snesfox
 rm output.asm
 rm out.sfc
 
-clang++ -std=c++20 *.cpp -o snesfox \
+clang++ -std=c++20 *.cpp tests/*.cpp -o snesfox \
+  -I. \
   -I/opt/homebrew/opt/sdl2/include \
   -I/opt/homebrew/opt/sdl2/include/SDL2 \
   -I/opt/homebrew/opt/sdl2_ttf/include \

@@ -25,6 +25,7 @@
 #include "opcodes.hpp"
 #include "reasm.hpp"
 #include "rom.hpp"
+#include "tests/ppu_test.hpp"
 
 namespace {
 
@@ -732,6 +733,7 @@ int runEmu(const std::string& romPath) {
 
 void printUsage() {
     std::cerr << "Usage:\n";
+    std::cerr << "  ./snesfox selftest                  # PPU register regression tests (no ROM)\n";
     std::cerr << "  ./snesfox emu <rom.sfc>\n";
     std::cerr << "  ./snesfox snap <rom.sfc> [frames]   # dump PPU/VRAM heuristics (no SDL)\n";
     std::cerr << "  ./snesfox header <rom.sfc>\n";
@@ -743,6 +745,10 @@ void printUsage() {
 } // namespace
 
 int SnesFoxApp::run(int argc, char** argv) {
+    if (argc >= 2 && std::string(argv[1]) == "selftest") {
+        return runPpuSelfTests();
+    }
+
     if (argc < 3) {
         printUsage();
         return 1;
