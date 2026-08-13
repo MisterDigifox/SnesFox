@@ -494,8 +494,72 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
 
     std::cerr << "  framebuffer: non-black opaque pix=" << nonBlack << " uniqColors~=" << uniq << '\n';
 
+    {
+        std::ofstream ppm("/tmp/snap.ppm", std::ios::binary);
+        ppm << "P6\n256 224\n255\n";
+        for (size_t i = 0; i < 256u * 224u; ++i) {
+            const uint32_t c = fb[i];
+            const char rgb[3] = {
+                static_cast<char>((c >> 16) & 0xFF),
+                static_cast<char>((c >> 8) & 0xFF),
+                static_cast<char>(c & 0xFF)
+            };
+            ppm.write(rgb, 3);
+        }
+    }
+
     std::cerr << "  heuristic: nonzero map words=" << tmNonzero << "  tile-priority(bit13) entries=" << tmPri13
               << "  nonzero CHR peek words=" << chrNz << '\n';
+
+    // --- TEMP sprite diag ---
+    std::cerr << "  OBSEL=$" << hex8(p.obsel()) << "\n";
+    {
+        const uint16_t nameBase = static_cast<uint16_t>((p.obsel() & 0x07) << 12);
+        unsigned nz = 0;
+        for (int i = 0; i < 1024; ++i) if (v[(nameBase + i) & 0x7FFF]) ++nz;
+        std::cerr << "  OBJ CHR@$" << hexW(nameBase) << " nonzero(of 1024 peeked, 64 tiles)=" << nz << "\n";
+        std::cerr << "  tile18 (word off 288..303): ";
+        for (int i = 288; i < 304; ++i) std::cerr << hexW(v[(nameBase + i) & 0x7FFF]) << ' ';
+        std::cerr << "\n";
+        std::cerr << "  VRAM@$0400 (DMA target) words[0..31]: ";
+        for (int i = 0; i < 32; ++i) std::cerr << hexW(v[(0x0400 + i) & 0x7FFF]) << ' ';
+        std::cerr << "\n";
+    }
+    {
+        const uint16_t* cg = p.cgram();
+        std::cerr << "  CGRAM[128..143] (OBJ pal0): ";
+        for (int i = 128; i < 144; ++i) std::cerr << hexW(cg[i]) << ' ';
+        std::cerr << "\n  fb(48,100)=" << std::hex << fb[100*256+48]
+                  << "  fb(8,10)=" << fb[10*256+8]
+                  << "  fb(220,100)=" << fb[100*256+220] << std::dec << "\n";
+        std::cerr << "  fb row100 x=95..120: ";
+        for (int x = 95; x <= 120; ++x) std::cerr << std::hex << fb[100*256+x] << std::dec << ' ';
+        std::cerr << "\n";
+    }
+    for (int bg = 0; bg < 2; ++bg) {
+        const uint16_t tmBase = static_cast<uint16_t>((p.bgSC(bg) >> 2) * 0x400u);
+        unsigned pri = 0, nz2 = 0;
+        for (int i = 0; i < 1024; ++i) {
+            const uint16_t w = v[(tmBase + static_cast<uint16_t>(i)) & 0x7FFF];
+            if (w) ++nz2;
+            if (w & 0x2000) ++pri;
+        }
+        std::cerr << "  BG" << (bg+1) << " tilemap@$" << hexW(tmBase) << " nonzero=" << nz2
+                  << "/1024  priHigh=" << pri << "/1024  sample[0..7]: ";
+        for (int i = 0; i < 8; ++i) std::cerr << hexW(v[(tmBase + static_cast<uint16_t>(i)) & 0x7FFF]) << ' ';
+        std::cerr << "  around(32,88)[tile col4 row11]: ";
+        const int tc = 32/8, tr = 88/8;
+        std::cerr << hexW(v[(tmBase + static_cast<uint16_t>(tr*32+tc)) & 0x7FFF]) << '\n';
+    }
+    const uint8_t* oam = p.oam();
+    for (int i = 0; i < 8; ++i) {
+        const uint8_t* s = oam + i * 4;
+        const uint8_t extra = oam[512 + (i >> 2)];
+        const uint8_t eBits = (extra >> ((i & 3) << 1)) & 0x03;
+        std::cerr << "  spr[" << i << "] x=" << (int)s[0] << "(+"<<(int)(eBits&1)<<") y=" << (int)s[1]
+                  << " tile=$" << hex8(s[2]) << " attr=$" << hex8(s[3]) << " large=" << (int)((eBits>>1)&1) << "\n";
+    }
+    // --- end TEMP sprite diag ---
 
     return 0;
 }

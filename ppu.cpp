@@ -810,7 +810,7 @@ bool Ppu::windowMaskBg(int x, int bg) const {
     const int     shift = (bg & 1) ? 4 : 0;
 
     const bool w1_en   = (wsel >> (shift + 1)) & 1;
-    const bool w1_area = (wsel >> (shift + 0)) & 1; // 0=clip outside, 1=clip inside
+    const bool w1_area = (wsel >> (shift + 0)) & 1; // 0=clip inside, 1=clip outside (area describes where the layer is *shown*)
     const bool w2_en   = (wsel >> (shift + 3)) & 1;
     const bool w2_area = (wsel >> (shift + 2)) & 1;
 
@@ -820,8 +820,8 @@ bool Ppu::windowMaskBg(int x, int bg) const {
     const bool in_w2 = (m_wh[2] <= m_wh[3]) && (x >= m_wh[2] && x <= m_wh[3]);
 
     // clip_wN = true means W_N says "clip this pixel"
-    const bool clip_w1 = w1_area ? in_w1 : !in_w1;
-    const bool clip_w2 = w2_area ? in_w2 : !in_w2;
+    const bool clip_w1 = w1_area ? !in_w1 : in_w1;
+    const bool clip_w2 = w2_area ? !in_w2 : in_w2;
 
     if (w1_en && !w2_en) return clip_w1;
     if (!w1_en)          return clip_w2;
@@ -849,8 +849,8 @@ bool Ppu::windowMaskObj(int x) const {
     const bool in_w1 = (m_wh[0] <= m_wh[1]) && (x >= m_wh[0] && x <= m_wh[1]);
     const bool in_w2 = (m_wh[2] <= m_wh[3]) && (x >= m_wh[2] && x <= m_wh[3]);
 
-    const bool clip_w1 = w1_area ? in_w1 : !in_w1;
-    const bool clip_w2 = w2_area ? in_w2 : !in_w2;
+    const bool clip_w1 = w1_area ? !in_w1 : in_w1;
+    const bool clip_w2 = w2_area ? !in_w2 : in_w2;
 
     if (w1_en && !w2_en) return clip_w1;
     if (!w1_en)          return clip_w2;
@@ -877,8 +877,8 @@ bool Ppu::colorWindowCombinedClip(int x) const {
     const bool in_w1 = (m_wh[0] <= m_wh[1]) && (x >= m_wh[0] && x <= m_wh[1]);
     const bool in_w2 = (m_wh[2] <= m_wh[3]) && (x >= m_wh[2] && x <= m_wh[3]);
 
-    const bool clip_w1 = w1_area ? in_w1 : !in_w1;
-    const bool clip_w2 = w2_area ? in_w2 : !in_w2;
+    const bool clip_w1 = w1_area ? !in_w1 : in_w1;
+    const bool clip_w2 = w2_area ? !in_w2 : in_w2;
 
     if (w1_en && !w2_en) return clip_w1;
     if (!w1_en)          return clip_w2;
