@@ -33,6 +33,7 @@ constexpr int TOP_MARGIN  = scale23(12);
 constexpr int BOTTOM_PAD  = scale23(12);
 
 constexpr int BUTTON_W = scale23(96);
+constexpr int BUTTON_W_WIDE = scale23(150); // wider variant for longer labels (e.g. "Next Frame")
 constexpr int BUTTON_H = scale23(28);
 constexpr int BUTTON_GAP_BELOW = scale23(10);
 constexpr int BUTTON_GAP_RIGHT = scale23(10);
@@ -141,6 +142,8 @@ bool Display::processEvents(DebugAction& action) {
                 action = DebugAction::TogglePause;
             } else if (SDL_PointInRect(&p, &m_stepButtonRect)) {
                 action = DebugAction::StepOne;
+            } else if (SDL_PointInRect(&p, &m_nextFrameButtonRect)) {
+                action = DebugAction::NextFrame;
             }
         }
     }
@@ -198,6 +201,13 @@ void Display::drawPauseButton(bool paused) {
 void Display::drawStepButton() {
     m_stepButtonRect = SDL_Rect{TEXT_PANEL_X + BUTTON_W + BUTTON_GAP_RIGHT, TOP_MARGIN, BUTTON_W, BUTTON_H};
     drawButtonChrome(m_renderer, m_font, m_stepButtonRect, "Step");
+}
+
+void Display::drawNextFrameButton() {
+    m_nextFrameButtonRect = SDL_Rect{
+        TEXT_PANEL_X + 2 * (BUTTON_W + BUTTON_GAP_RIGHT), TOP_MARGIN, BUTTON_W_WIDE, BUTTON_H
+    };
+    drawButtonChrome(m_renderer, m_font, m_nextFrameButtonRect, "Next Frame");
 }
 
 void Display::renderLines(const std::vector<std::string>& lines, int xOffset, int startY) {
@@ -286,8 +296,10 @@ void Display::presentWithFrame(const uint32_t* pixels,
     drawPauseButton(paused);
     if (paused) {
         drawStepButton();
+        drawNextFrameButton();
     } else {
         m_stepButtonRect = SDL_Rect{0, 0, 0, 0};
+        m_nextFrameButtonRect = SDL_Rect{0, 0, 0, 0};
     }
     renderLines(lines, TEXT_PANEL_X, TOP_MARGIN + BUTTON_H + BUTTON_GAP_BELOW);
     SDL_RenderPresent(m_renderer);

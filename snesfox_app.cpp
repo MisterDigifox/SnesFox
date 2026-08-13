@@ -681,6 +681,7 @@ int runEmu(const std::string& romPath) {
     std::deque<std::string> instructionLog;
     bool paused = false;
     bool stepOnce = false;
+    bool nextFrameOnce = false;
 
     Display display("snesfox");
     display.setFixedPanelLineCount(pausedEmuPanelLineCount(headerLines.size()));
@@ -697,6 +698,9 @@ int runEmu(const std::string& romPath) {
         }
         if (action == DebugAction::StepOne && paused) {
             stepOnce = true;
+        }
+        if (action == DebugAction::NextFrame && paused) {
+            nextFrameOnce = true;
         }
 
         if (!paused) {
@@ -721,6 +725,14 @@ int runEmu(const std::string& romPath) {
             instructionLog.push_front(formatDisasmLine(pcBefore, cpu, true));
             if (instructionLog.size() > LOG_SIZE) {
                 instructionLog.pop_back();
+            }
+        } else if (nextFrameOnce) {
+            nextFrameOnce = false;
+
+            const uint64_t frameStartCycles = cpu.cycles();
+            while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
+                cpu.step(bus);
+                advanceCpuScheduling(bus, cpu, true);
             }
         }
 

@@ -8,7 +8,8 @@
 enum class DebugAction {
     None,
     TogglePause,
-    StepOne
+    StepOne,
+    NextFrame
 };
 
 class Display final {
@@ -30,6 +31,7 @@ private:
     void applyPanelWindowHeight(std::size_t lineCount);
     void drawPauseButton(bool paused);
     void drawStepButton();
+    void drawNextFrameButton();
 
     SDL_Window*   m_window      = nullptr;
     SDL_Renderer* m_renderer    = nullptr;
@@ -38,6 +40,7 @@ private:
     int           m_windowWidth = 0;
     int           m_windowHeight = 0; // last size sent to SDL
     std::size_t   m_fixedPanelLineCount = 0;
-    SDL_Rect      m_pauseButtonRect{0, 0, 0, 0}; // hit-test rect, set by drawPauseButton
-    SDL_Rect      m_stepButtonRect{0, 0, 0, 0};  // hit-test rect, only live while paused
+    SDL_Rect      m_pauseButtonRect{0, 0, 0, 0};     // hit-test rect, set by drawPauseButton
+    SDL_Rect      m_stepButtonRect{0, 0, 0, 0};      // hit-test rect, only live while paused
+    SDL_Rect      m_nextFrameButtonRect{0, 0, 0, 0}; // hit-test rect, only live while paused
 };
