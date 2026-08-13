@@ -282,17 +282,8 @@ DebugPanel makeDebugPanel(
         panel.palette[i] = ppu.cgram()[i];
     }
 
-    if (!paused) {
-        panel.sections.push_back(DebugSection{"CPU (running)", {
-            std::string("PC ") + hex24(cpu.pc24()) + "  " + cpu.instruction(),
-            "cycles " + std::to_string(cpu.cycles()),
-            "Space: step (when paused)"
-        }});
-        return panel;
-    }
-
     panel.sections.push_back(DebugSection{"CPU Debug", {
-        "State : PAUSED",
+        std::string("State : ") + (paused ? "PAUSED" : "RUNNING"),
         "Reset Vector : " + hex16(cpu.resetVector()),
         "Bank : " + hex8(cpu.bank()),
         "PC : " + hex16(cpu.pc()),
@@ -676,6 +667,16 @@ int runEmu(const std::string& romPath) {
     bool stepOnce = false;
     bool nextFrameOnce = false;
 
+    auto logInstruction = [&](uint32_t pcBefore) {
+        if (!instructionLog.empty() && instructionLog.front().rfind("> ", 0) == 0) {
+            instructionLog.front().replace(0, 2, "  ");
+        }
+        instructionLog.push_front(formatDisasmLine(pcBefore, cpu, true));
+        if (instructionLog.size() > LOG_SIZE) {
+            instructionLog.pop_back();
+        }
+    };
+
     Display display("snesfox");
     AudioOutput audio;
 
@@ -723,22 +724,16 @@ int runEmu(const std::string& romPath) {
             const uint32_t pcBefore = cpu.pc24();
             cpu.step(bus);
             advanceCpuScheduling(bus, cpu, true);
-
-            if (!instructionLog.empty() && instructionLog.front().rfind("> ", 0) == 0) {
-                instructionLog.front().replace(0, 2, "  ");
-            }
-
-            instructionLog.push_front(formatDisasmLine(pcBefore, cpu, true));
-            if (instructionLog.size() > LOG_SIZE) {
-                instructionLog.pop_back();
-            }
+            logInstruction(pcBefore);
         } else if (nextFrameOnce) {
             nextFrameOnce = false;
 
             const uint64_t frameStartCycles = cpu.cycles();
             while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
+                const uint32_t pcBefore = cpu.pc24();
                 cpu.step(bus);
                 advanceCpuScheduling(bus, cpu, true);
+                logInstruction(pcBefore);
             }
         }
 

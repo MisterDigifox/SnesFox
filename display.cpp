@@ -211,6 +211,9 @@ DebugAction Display::drawControls(bool paused) {
 void Display::drawDebugPanel(const DebugPanel& panel) {
     ImGui::Begin("Debug", nullptr, kPanelWindowFlags); // appends to the window opened by drawControls
 
+    // Scrolls independently of the toolbar drawn by drawControls(), so the buttons stay pinned.
+    ImGui::BeginChild("DebugScrollRegion", ImGui::GetContentRegionAvail(), false);
+
     for (const auto& section : panel.sections) {
         ImGui::SeparatorText(section.title.c_str());
         if (ImGui::BeginTable(section.title.c_str(), 2, ImGuiTableFlags_SizingFixedFit)) {
@@ -259,6 +262,7 @@ void Display::drawDebugPanel(const DebugPanel& panel) {
         }
     }
 
+    ImGui::EndChild();
     ImGui::End();
 }
 
