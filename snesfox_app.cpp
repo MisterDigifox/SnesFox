@@ -687,6 +687,14 @@ int runEmu(const std::string& romPath) {
     display.setFixedPanelLineCount(pausedEmuPanelLineCount(headerLines.size()));
     AudioOutput audio;
 
+    // Pace the loop to the SNES's real NTSC refresh rate rather than running
+    // as fast as the host CPU allows (SDL_RENDERER_PRESENTVSYNC alone isn't
+    // reliable pacing — it tracks the display's refresh rate, not 60.0988Hz,
+    // and some platforms/drivers ignore it entirely).
+    constexpr double kTargetFps = 60.0988;
+    const uint64_t perfFreq = SDL_GetPerformanceFrequency();
+    uint64_t frameStartPerf = SDL_GetPerformanceCounter();
+
     bool running = true;
     while (running) {
         DebugAction action = DebugAction::None;
@@ -738,6 +746,14 @@ int runEmu(const std::string& romPath) {
 
         const auto lines = makeDebugLines(headerLines, cpu, bus.ppu(), instructionLog, paused);
         display.presentWithFrame(bus.ppu().framebuffer(), lines, paused);
+
+        const uint64_t frameEndPerf = SDL_GetPerformanceCounter();
+        const double elapsedMs = static_cast<double>(frameEndPerf - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
+        constexpr double kTargetFrameMs = 1000.0 / kTargetFps;
+        if (elapsedMs < kTargetFrameMs) {
+            SDL_Delay(static_cast<uint32_t>(kTargetFrameMs - elapsedMs));
+        }
+        frameStartPerf = SDL_GetPerformanceCounter();
     }
 
     return 0;
