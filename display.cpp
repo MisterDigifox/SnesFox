@@ -32,6 +32,83 @@ ImVec4 bgr555ToImVec4(uint16_t c) {
     const float b = static_cast<float>((c >> 10) & 0x1F) / 31.0f;
     return ImVec4(r, g, b, 1.0f);
 }
+
+// Dark, rounded theme built around the same teal accent used for debug values elsewhere in the panel.
+void applyModernDarkTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    style.WindowRounding    = 8.0f;
+    style.ChildRounding     = 6.0f;
+    style.FrameRounding     = 6.0f;
+    style.PopupRounding     = 6.0f;
+    style.ScrollbarRounding = 8.0f;
+    style.GrabRounding      = 6.0f;
+    style.TabRounding       = 6.0f;
+    style.WindowPadding     = ImVec2(14.0f, 14.0f);
+    style.FramePadding      = ImVec2(10.0f, 6.0f);
+    style.ItemSpacing       = ImVec2(10.0f, 8.0f);
+    style.ItemInnerSpacing  = ImVec2(8.0f, 6.0f);
+    style.WindowBorderSize  = 0.0f;
+    style.FrameBorderSize   = 0.0f;
+    style.PopupBorderSize   = 1.0f;
+    style.GrabMinSize       = 10.0f;
+    style.ScrollbarSize     = 14.0f;
+
+    const ImVec4 accent      (0.31f, 0.78f, 0.72f, 1.00f);
+    const ImVec4 accentHover (0.38f, 0.85f, 0.79f, 1.00f);
+    const ImVec4 accentActive(0.26f, 0.68f, 0.63f, 1.00f);
+    const ImVec4 bg          (0.10f, 0.11f, 0.13f, 1.00f);
+    const ImVec4 bgLight     (0.14f, 0.15f, 0.18f, 1.00f);
+    const ImVec4 bgLighter   (0.19f, 0.20f, 0.24f, 1.00f);
+    const ImVec4 text        (0.90f, 0.91f, 0.92f, 1.00f);
+    const ImVec4 textMuted   (0.55f, 0.56f, 0.60f, 1.00f);
+    const ImVec4 border      (0.24f, 0.25f, 0.29f, 0.60f);
+
+    ImVec4* c = style.Colors;
+    c[ImGuiCol_Text]                 = text;
+    c[ImGuiCol_TextDisabled]         = textMuted;
+    c[ImGuiCol_WindowBg]             = bg;
+    c[ImGuiCol_ChildBg]              = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_PopupBg]              = bgLight;
+    c[ImGuiCol_Border]               = border;
+    c[ImGuiCol_BorderShadow]         = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_FrameBg]              = bgLighter;
+    c[ImGuiCol_FrameBgHovered]       = ImVec4(0.22f, 0.23f, 0.28f, 1.00f);
+    c[ImGuiCol_FrameBgActive]        = ImVec4(0.26f, 0.27f, 0.32f, 1.00f);
+    c[ImGuiCol_TitleBg]              = bg;
+    c[ImGuiCol_TitleBgActive]        = bg;
+    c[ImGuiCol_TitleBgCollapsed]     = bg;
+    c[ImGuiCol_MenuBarBg]            = bgLight;
+    c[ImGuiCol_ScrollbarBg]          = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_ScrollbarGrab]        = bgLighter;
+    c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.26f, 0.27f, 0.32f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabActive]  = accent;
+    c[ImGuiCol_CheckMark]            = accent;
+    c[ImGuiCol_SliderGrab]           = accent;
+    c[ImGuiCol_SliderGrabActive]     = accentActive;
+    c[ImGuiCol_Button]               = bgLighter;
+    c[ImGuiCol_ButtonHovered]        = ImVec4(accent.x, accent.y, accent.z, 0.35f);
+    c[ImGuiCol_ButtonActive]         = ImVec4(accent.x, accent.y, accent.z, 0.55f);
+    c[ImGuiCol_Header]               = ImVec4(accent.x, accent.y, accent.z, 0.20f);
+    c[ImGuiCol_HeaderHovered]        = ImVec4(accent.x, accent.y, accent.z, 0.35f);
+    c[ImGuiCol_HeaderActive]         = ImVec4(accent.x, accent.y, accent.z, 0.50f);
+    c[ImGuiCol_Separator]            = border;
+    c[ImGuiCol_SeparatorHovered]     = accentHover;
+    c[ImGuiCol_SeparatorActive]      = accent;
+    c[ImGuiCol_ResizeGrip]           = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_ResizeGripHovered]    = accentHover;
+    c[ImGuiCol_ResizeGripActive]     = accent;
+    c[ImGuiCol_Tab]                  = bgLight;
+    c[ImGuiCol_TabHovered]           = ImVec4(accent.x, accent.y, accent.z, 0.35f);
+    c[ImGuiCol_TabSelected]          = bgLighter;
+    c[ImGuiCol_TableHeaderBg]        = bgLight;
+    c[ImGuiCol_TableBorderStrong]    = border;
+    c[ImGuiCol_TableBorderLight]     = ImVec4(0.20f, 0.21f, 0.25f, 0.50f);
+    c[ImGuiCol_TableRowBg]           = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_TableRowBgAlt]        = ImVec4(1, 1, 1, 0.03f);
+    c[ImGuiCol_TextSelectedBg]       = ImVec4(accent.x, accent.y, accent.z, 0.35f);
+    c[ImGuiCol_DragDropTarget]       = accent;
+}
 }
 
 Display::Display(const std::string& title) {
@@ -61,6 +138,7 @@ Display::Display(const std::string& title) {
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr; // no persisted UI layout needed
     ImGui::StyleColorsDark();
+    applyModernDarkTheme();
     ImGui_ImplSDL2_InitForSDLRenderer(m_window, m_renderer);
     ImGui_ImplSDLRenderer2_Init(m_renderer);
 }

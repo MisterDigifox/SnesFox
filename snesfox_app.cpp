@@ -27,6 +27,7 @@
 #include "rom.hpp"
 #include "tests/cpu_test.hpp"
 #include "tests/ppu_test.hpp"
+#include "tests/sdsp_test.hpp"
 
 namespace {
 
@@ -276,6 +277,11 @@ DebugPanel makeDebugPanel(
     DebugPanel panel;
     panel.sections.push_back(headerLinesToSection(headerLines));
 
+    panel.showPalette = true;
+    for (int i = 0; i < 16; ++i) {
+        panel.palette[i] = ppu.cgram()[i];
+    }
+
     if (!paused) {
         panel.sections.push_back(DebugSection{"CPU (running)", {
             std::string("PC ") + hex24(cpu.pc24()) + "  " + cpu.instruction(),
@@ -348,11 +354,6 @@ DebugPanel makeDebugPanel(
         }
     }
     panel.sections.push_back(std::move(ppuSection));
-
-    panel.showPalette = true;
-    for (int i = 0; i < 16; ++i) {
-        panel.palette[i] = ppu.cgram()[i];
-    }
 
     panel.instructionLog.assign(instructionLog.begin(), instructionLog.end());
     return panel;
@@ -773,7 +774,8 @@ int SnesFoxApp::run(int argc, char** argv) {
     if (argc >= 2 && std::string(argv[1]) == "selftest") {
         const int ppuResult = runPpuSelfTests();
         const int cpuResult = runCpuSelfTests();
-        return (ppuResult == 0 && cpuResult == 0) ? 0 : 1;
+        const int sdspResult = runSdspSelfTests();
+        return (ppuResult == 0 && cpuResult == 0 && sdspResult == 0) ? 0 : 1;
     }
 
     if (argc < 3) {
