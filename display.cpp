@@ -23,7 +23,9 @@ constexpr int TEXT_PANEL_X = GAME_DST_W;
 constexpr ImVec4 LABEL_COLOR{0.55f, 0.56f, 0.59f, 1.0f};
 constexpr ImVec4 VALUE_COLOR{0.46f, 0.84f, 0.77f, 1.0f};
 constexpr float  PALETTE_SWATCH_SIZE = 20.0f;
-constexpr int    PALETTE_COLUMNS = 8;
+constexpr float  PALETTE_SWATCH_SPACING = 3.0f; // tight enough for a "Pal NN" label + 16 swatches on one row
+constexpr int    PALETTE_ROWS = 16;
+constexpr int    PALETTE_COLS = 16;
 
 // SNES CGRAM entries are 15-bit BGR555: bits0-4=R, bits5-9=G, bits10-14=B.
 ImVec4 bgr555ToImVec4(uint16_t c) {
@@ -232,14 +234,22 @@ void Display::drawDebugPanel(const DebugPanel& panel) {
 
     if (panel.showPalette) {
         ImGui::SeparatorText("Palette");
-        for (int i = 0; i < static_cast<int>(panel.palette.size()); ++i) {
-            ImGui::PushID(i);
-            ImGui::ColorButton("##swatch", bgr555ToImVec4(panel.palette[i]),
-                               ImGuiColorEditFlags_AlphaOpaque,
-                               ImVec2(PALETTE_SWATCH_SIZE, PALETTE_SWATCH_SIZE));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(PALETTE_SWATCH_SPACING, PALETTE_SWATCH_SPACING));
+        for (int row = 0; row < PALETTE_ROWS; ++row) {
+            ImGui::PushID(row);
+            ImGui::Text("Pal %2d", row);
+            ImGui::SameLine();
+            for (int col = 0; col < PALETTE_COLS; ++col) {
+                ImGui::PushID(col);
+                ImGui::ColorButton("##swatch", bgr555ToImVec4(panel.palette[row * PALETTE_COLS + col]),
+                                   ImGuiColorEditFlags_AlphaOpaque,
+                                   ImVec2(PALETTE_SWATCH_SIZE, PALETTE_SWATCH_SIZE));
+                ImGui::PopID();
+                if (col != PALETTE_COLS - 1) ImGui::SameLine();
+            }
             ImGui::PopID();
-            if (i % PALETTE_COLUMNS != PALETTE_COLUMNS - 1) ImGui::SameLine();
         }
+        ImGui::PopStyleVar();
     }
 
     if (!panel.instructionLog.empty()) {

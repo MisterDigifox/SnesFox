@@ -278,7 +278,7 @@ DebugPanel makeDebugPanel(
     panel.sections.push_back(headerLinesToSection(headerLines));
 
     panel.showPalette = true;
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < 256; ++i) {
         panel.palette[i] = ppu.cgram()[i];
     }
 

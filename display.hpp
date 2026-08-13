@@ -21,10 +21,11 @@ struct DebugSection {
     std::vector<std::string> lines;
 };
 
+// SNES CGRAM: 16 palettes × 16 colors each (256 entries total).
 struct DebugPanel {
     std::vector<DebugSection> sections;
     bool showPalette = false;
-    std::array<uint16_t, 16> palette{}; // raw SNES BGR555 entries, valid only if showPalette
+    std::array<uint16_t, 256> palette{}; // raw SNES BGR555 entries, valid only if showPalette
     std::vector<std::string> instructionLog;
 };
 
