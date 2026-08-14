@@ -1,5 +1,7 @@
 #include "dma.hpp"
 #include "bus.hpp"
+#include <cstdio>
+#include <cstdlib>
 
 // Transfer unit patterns for the 3-bit mode field (bits 2:0 of $43x0).
 // Each entry is the sequence of B-bus offsets written per "unit".
@@ -70,9 +72,9 @@ void Dma::runChannel(int ch, Bus& bus) {
 void Dma::stepA(Channel& c) {
     if (c.ctrl & 0x08) return;
     if (c.ctrl & 0x10) {
-        --c.srcAddr;
+        --c.hdmaCurAddr;
     } else {
-        ++c.srcAddr;
+        ++c.hdmaCurAddr;
     }
 }
 
@@ -90,18 +92,18 @@ void Dma::transferOneUnit(int ch, Bus& bus) {
         const uint16_t bAddr = static_cast<uint16_t>(0x2100 + c.bBus + bOff);
 
         if (toB) {
-            const uint8_t val = bus.read(c.srcBank, c.srcAddr);
+            const uint8_t val = bus.read(c.hdmaCurBank, c.hdmaCurAddr);
             bus.write(0x00, bAddr, val);
         } else {
             const uint8_t val = bus.read(0x00, bAddr);
-            bus.write(c.srcBank, c.srcAddr, val);
+            bus.write(c.hdmaCurBank, c.hdmaCurAddr, val);
         }
 
         if (!fixed) {
             if (decr) {
-                --c.srcAddr;
+                --c.hdmaCurAddr;
             } else {
-                ++c.srcAddr;
+                ++c.hdmaCurAddr;
             }
         }
     }
@@ -145,8 +147,14 @@ bool Dma::hdmaReadLineCount(int ch, Bus& bus) {
     Channel& c          = m_ch[ch];
     const bool indirect = (c.ctrl & 0x40) != 0;
 
-    const uint8_t line = bus.read(c.srcBank, c.srcAddr);
+    const uint16_t readAddr = c.hdmaCurAddr;
+    const uint8_t line = bus.read(c.hdmaCurBank, c.hdmaCurAddr);
     stepA(c);
+
+    if ((ch == 5 || ch == 6) && std::getenv("SNESFOX_WIN_LOG")) {
+        std::fprintf(stderr, "[HDMARD] ch=%d readAddr=%04X:%02X line=%02X\n",
+            ch, readAddr, c.hdmaCurBank, line);
+    }
 
     if (line == 0) {
         // Terminator (snes9x also has indirect special case; treat as end for now)
@@ -165,9 +173,9 @@ bool Dma::hdmaReadLineCount(int ch, Bus& bus) {
     m_hdmaDoTransfer[ch] = true;
 
     if (indirect) {
-        uint8_t lo = bus.read(c.srcBank, c.srcAddr);
+        uint8_t lo = bus.read(c.hdmaCurBank, c.hdmaCurAddr);
         stepA(c);
-        uint8_t hi = bus.read(c.srcBank, c.srcAddr);
+        uint8_t hi = bus.read(c.hdmaCurBank, c.hdmaCurAddr);
         stepA(c);
         m_hdmaIndirectPtr[ch]  = static_cast<uint16_t>(lo | (static_cast<uint16_t>(hi) << 8));
         m_hdmaIndirectBank[ch] = c.unused7;
@@ -184,9 +192,18 @@ void Dma::beginHdmaFrame(uint8_t enableMask, Bus& bus) {
             continue;
         }
 
-        m_ch[ch].srcAddr = m_ch[ch].tableBaseAddr;
-        m_ch[ch].srcBank = m_ch[ch].tableBaseBank;
+        // Reload the HDMA cursor from the CPU-visible A1Tx/A1Bx registers — mirrors real
+        // hardware's separate A2Ax "current table address", so writes to srcAddr/srcBank
+        // during the frame (even mid in-progress HDMA) never redirect this channel's
+        // live cursor; only the once-per-frame reload here picks them up.
+        m_ch[ch].hdmaCurAddr = m_ch[ch].srcAddr;
+        m_ch[ch].hdmaCurBank = m_ch[ch].srcBank;
         m_hdmaActive[ch] = true;
+
+        if ((ch == 5 || ch == 6) && std::getenv("SNESFOX_WIN_LOG")) {
+            std::fprintf(stderr, "[HDMABEGIN] ch=%d hdmaCurAddr=%04X hdmaCurBank=%02X\n",
+                ch, m_ch[ch].hdmaCurAddr, m_ch[ch].hdmaCurBank);
+        }
 
         if (!hdmaReadLineCount(ch, bus)) {
             m_hdmaActive[ch] = false;
@@ -248,8 +265,12 @@ void Dma::writeReg(uint8_t ch, uint8_t reg, uint8_t value) {
         case 6: c.byteCount = (c.byteCount & 0x00FF) | (static_cast<uint16_t>(value) << 8); break;
         case 7: c.unused7   = value; break;
     }
-    if (reg >= 2 && reg <= 4) {
-        c.tableBaseAddr = c.srcAddr;
-        c.tableBaseBank = c.srcBank;
+    // srcAddr/srcBank (A1Tx/A1Bx) are purely the CPU-visible config register here — HDMA
+    // playback reads/advances the separate hdmaCurAddr/hdmaCurBank cursor (see
+    // beginHdmaFrame), so this write can never redirect an in-progress HDMA transfer.
+    if ((ch == 5 || ch == 6) && std::getenv("SNESFOX_WIN_LOG")) {
+        std::fprintf(stderr, "[DMAREG] ch=%u reg=%u value=%02X -> srcAddr=%04X srcBank=%02X"
+            " ctrl=%02X bBus=%02X active=%d\n",
+            ch, reg, value, c.srcAddr, c.srcBank, c.ctrl, c.bBus, m_hdmaActive[ch] ? 1 : 0);
     }
 }

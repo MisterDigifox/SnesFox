@@ -22,13 +22,17 @@ private:
     struct Channel {
         uint8_t  ctrl      = 0xFF; // $43x0
         uint8_t  bBus      = 0xFF; // $43x1
-        uint16_t srcAddr   = 0xFFFF; // $43x2/$43x3 — current table pointer (HDMA advances)
-        uint8_t  srcBank   = 0xFF; // $43x4
+        uint16_t srcAddr   = 0xFFFF; // $43x2/$43x3 — A1TxL/H: CPU-visible table/general-DMA address
+        uint8_t  srcBank   = 0xFF; // $43x4 — A1Bx
         uint16_t byteCount = 0xFFFF; // $43x5/$43x6
         uint8_t  unused7   = 0xFF; // $43x7
-        // Programmed table origin (updated on writes to $43x2-$43x4). Reloaded each frame.
-        uint16_t tableBaseAddr = 0xFFFF;
-        uint8_t  tableBaseBank = 0xFF;
+        // A2AxL/H+bank equivalent: HDMA's own live table cursor, reloaded from srcAddr/
+        // srcBank once at the start of each frame (beginHdmaFrame) and advanced only by
+        // HDMA playback. Kept separate from srcAddr/srcBank so that a CPU write to A1Tx
+        // — routine every frame in HDMA-driven code — can never redirect an in-progress
+        // HDMA transfer; real hardware has the same A1Tx/A2Ax separation for this reason.
+        uint16_t hdmaCurAddr = 0xFFFF;
+        uint8_t  hdmaCurBank = 0xFF;
     };
 
     Channel m_ch[8];
