@@ -171,6 +171,9 @@ bool Display::processEvents(DebugAction& action) {
                 case SDLK_SPACE:
                     action = DebugAction::StepOne;
                     break;
+                case SDLK_ESCAPE:
+                    action = DebugAction::TogglePause;
+                    break;
             }
         }
     }
