@@ -434,15 +434,6 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
     ImGui::Begin("##Dividers", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings
         | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
-    // Regular (non-popup) windows keep whatever z-order they last had — just Begin()-ing
-    // this one last in the frame doesn't guarantee it renders above the panels (e.g.
-    // scrolling the Tiles Viewer bumps it in front of this overlay). Force front every
-    // frame so the dividers stay visible over the panels' own backgrounds; skip it while
-    // the palette popup is open so this never steals keyboard focus from its input fields
-    // (popups render above this overlay regardless, since ImGui always fronts those).
-    if (!ImGui::IsPopupOpen("EditPaletteColor")) {
-        ImGui::SetWindowFocus();
-    }
     ImDrawList* dividerDrawList = ImGui::GetWindowDrawList();
     const ImU32 dividerColor = IM_COL32(DIVIDER_COLOR.r, DIVIDER_COLOR.g, DIVIDER_COLOR.b, DIVIDER_COLOR.a);
     dividerDrawList->AddLine(ImVec2(0.0f, static_cast<float>(WINDOW_HEIGHT)),
