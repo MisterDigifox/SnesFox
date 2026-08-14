@@ -46,6 +46,8 @@ public:
     const uint16_t* vram()  const { return m_vram.data(); }
     const uint8_t*  oam()   const { return m_oam.data(); }
     const uint16_t* cgram() const { return m_cgram.data(); }
+    // Debug-only live patch (e.g. palette editor); bypasses the normal $2121/$2122 write path.
+    void setCgramEntry(int index, uint16_t bgr555) { m_cgram[static_cast<size_t>(index)] = bgr555; }
 
     // -------------------------------------------------------
     // Rendering — called by Bus::stepPeripherals each scanline

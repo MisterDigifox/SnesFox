@@ -30,6 +30,13 @@ struct DebugPanel {
     std::vector<std::string> instructionLog;
 };
 
+// Result of double-clicking a palette swatch and hitting Apply in the editor popup.
+struct PaletteEdit {
+    bool applied = false;
+    int index = 0;
+    uint16_t bgr555 = 0;
+};
+
 class Display final {
 public:
     explicit Display(const std::string& title);
@@ -41,7 +48,8 @@ public:
     // which button (if any) was clicked.
     DebugAction drawControls(bool paused);
     // Left menu (ROM/CPU/PPU sections + instruction log) — game frame — right menu (palette).
-    void presentWithFrame(const uint32_t* pixels, const DebugPanel& panel);
+    // Returns the pending palette edit (if the user hit Apply in the swatch editor popup this frame).
+    PaletteEdit presentWithFrame(const uint32_t* pixels, const DebugPanel& panel);
 private:
     void drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog);
     void drawRightPanel(const DebugPanel& panel);
@@ -52,4 +60,10 @@ private:
     SDL_Texture*  m_frameTex    = nullptr; // 256×224 streaming texture
     int           m_windowWidth = 0;
     int           m_windowHeight = 0;
+
+    int m_editingPaletteIndex = -1; // -1 when the palette editor popup is closed
+    int m_editR = 0;
+    int m_editG = 0;
+    int m_editB = 0;
+    PaletteEdit m_pendingPaletteEdit;
 };

@@ -259,11 +259,14 @@ void Display::drawLeftPanel(const std::vector<DebugSection>& sections, const std
 }
 
 void Display::drawRightPanel(const DebugPanel& panel) {
+    m_pendingPaletteEdit = PaletteEdit{};
+
     ImGui::SetNextWindowPos(ImVec2(static_cast<float>(TEXT_PANEL_X), 0.0f));
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(PANEL_WIDTH), static_cast<float>(WINDOW_HEIGHT)));
     ImGui::Begin("Right", nullptr, kPanelWindowFlags);
 
     if (panel.showPalette) {
+        bool openPaletteEditor = false;
         ImGui::SeparatorText("Palette");
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(PALETTE_SWATCH_SPACING, PALETTE_SWATCH_SPACING));
         for (int row = 0; row < PALETTE_ROWS; ++row) {
@@ -272,16 +275,20 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             ImGui::SameLine();
             for (int col = 0; col < PALETTE_COLS; ++col) {
                 ImGui::PushID(col);
-                const uint16_t raw = panel.palette[row * PALETTE_COLS + col];
+                const int index = row * PALETTE_COLS + col;
+                const uint16_t raw = panel.palette[index];
+                const int r8 = (raw & 0x1F) * 255 / 31;
+                const int g8 = ((raw >> 5) & 0x1F) * 255 / 31;
+                const int b8 = ((raw >> 10) & 0x1F) * 255 / 31;
+
                 if (ImGui::ColorButton("##swatch", bgr555ToImVec4(raw),
                                        ImGuiColorEditFlags_AlphaOpaque,
                                        ImVec2(PALETTE_SWATCH_SIZE, PALETTE_SWATCH_SIZE))) {
-                    const int r8 = (raw & 0x1F) * 255 / 31;
-                    const int g8 = ((raw >> 5) & 0x1F) * 255 / 31;
-                    const int b8 = ((raw >> 10) & 0x1F) * 255 / 31;
-                    char clipboardText[16];
-                    std::snprintf(clipboardText, sizeof(clipboardText), "%d, %d, %d", r8, g8, b8);
-                    ImGui::SetClipboardText(clipboardText);
+                    m_editingPaletteIndex = index;
+                    m_editR = r8;
+                    m_editG = g8;
+                    m_editB = b8;
+                    openPaletteEditor = true;
                 }
                 ImGui::PopID();
                 if (col != PALETTE_COLS - 1) ImGui::SameLine();
@@ -289,6 +296,37 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             ImGui::PopID();
         }
         ImGui::PopStyleVar();
+
+        // OpenPopup/BeginPopup must resolve to the same ID; deferred here so it's outside the
+        // per-swatch PushID(row)/PushID(col) scope the click was detected in.
+        if (openPaletteEditor) {
+            ImGui::OpenPopup("EditPaletteColor");
+        }
+        if (ImGui::BeginPopup("EditPaletteColor")) {
+            ImGui::Text("Edit palette color #%d", m_editingPaletteIndex);
+            ImGui::InputInt("R", &m_editR);
+            ImGui::InputInt("G", &m_editG);
+            ImGui::InputInt("B", &m_editB);
+            m_editR = std::clamp(m_editR, 0, 255);
+            m_editG = std::clamp(m_editG, 0, 255);
+            m_editB = std::clamp(m_editB, 0, 255);
+            if (ImGui::Button("Copy")) {
+                char clipboardText[16];
+                std::snprintf(clipboardText, sizeof(clipboardText), "%d, %d, %d", m_editR, m_editG, m_editB);
+                ImGui::SetClipboardText(clipboardText);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Apply")) {
+                const uint16_t r5 = static_cast<uint16_t>(m_editR * 31 / 255);
+                const uint16_t g5 = static_cast<uint16_t>(m_editG * 31 / 255);
+                const uint16_t b5 = static_cast<uint16_t>(m_editB * 31 / 255);
+                const uint16_t newRaw = static_cast<uint16_t>(r5 | (g5 << 5) | (b5 << 10));
+                m_pendingPaletteEdit = PaletteEdit{true, m_editingPaletteIndex, newRaw};
+                m_editingPaletteIndex = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 
     ImGui::End();
@@ -307,7 +345,7 @@ void Display::drawBottomPanel() {
     ImGui::End();
 }
 
-void Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) {
+PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) {
     // Create streaming texture once
     if (!m_frameTex) {
         m_frameTex = SDL_CreateTexture(m_renderer,
@@ -343,4 +381,5 @@ void Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) 
     SDL_RenderDrawLine(m_renderer, TEXT_PANEL_X, 0, TEXT_PANEL_X, WINDOW_HEIGHT);
 
     SDL_RenderPresent(m_renderer);
+    return m_pendingPaletteEdit;
 }

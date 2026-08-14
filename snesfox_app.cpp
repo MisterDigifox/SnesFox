@@ -749,7 +749,10 @@ int runEmu(const std::string& romPath) {
         }
 
         const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), instructionLog, paused);
-        display.presentWithFrame(bus.ppu().framebuffer(), panel);
+        const PaletteEdit paletteEdit = display.presentWithFrame(bus.ppu().framebuffer(), panel);
+        if (paletteEdit.applied) {
+            bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);
+        }
 
         const uint64_t frameEndPerf = SDL_GetPerformanceCounter();
         const double elapsedMs = static_cast<double>(frameEndPerf - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
