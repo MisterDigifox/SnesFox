@@ -23,7 +23,7 @@ struct DebugSection {
 
 // SNES CGRAM: 16 palettes × 16 colors each (256 entries total).
 struct DebugPanel {
-    std::vector<DebugSection> sections;
+    std::vector<DebugSection> sections; // ROM, CPU Debug, PPU State — rendered in the left-side menu
     bool showPalette = false;
     std::array<uint16_t, 256> palette{}; // raw SNES BGR555 entries, valid only if showPalette
     std::vector<std::string> instructionLog;
@@ -36,12 +36,14 @@ public:
     bool processEvents(DebugAction& action);
     // Starts the ImGui frame; call once per iteration before drawControls/presentWithFrame.
     void beginFrame();
-    // Draws the Pause/Resume/Step/Next Frame toolbar; returns which button (if any) was clicked.
+    // Draws the Pause/Resume/Step/Next Frame toolbar pinned at the top of the left menu; returns
+    // which button (if any) was clicked.
     DebugAction drawControls(bool paused);
-    // Game frame (256×224 ARGB) on the left, ImGui debug panel on the right.
+    // Left menu (ROM/CPU/PPU sections + instruction log) — game frame — right menu (palette).
     void presentWithFrame(const uint32_t* pixels, const DebugPanel& panel);
 private:
-    void drawDebugPanel(const DebugPanel& panel);
+    void drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog);
+    void drawRightPanel(const DebugPanel& panel);
 
     SDL_Window*   m_window      = nullptr;
     SDL_Renderer* m_renderer    = nullptr;

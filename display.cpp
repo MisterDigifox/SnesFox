@@ -11,14 +11,15 @@ constexpr int scale23(int v) { return (v * 2 + 1) / 3; }
 
 // Baseline window height keeps scaled SNES framebuffer centred with proportional inset (~32 px).
 constexpr int WINDOW_HEIGHT = scale23(768);
+constexpr int LEFT_PANEL_WIDTH = scale23(440);
 constexpr int PANEL_WIDTH   = scale23(700);
 
 constexpr int GAME_SCALE  = 2;
 constexpr int GAME_DST_W  = 256 * GAME_SCALE;                    // 512
 constexpr int GAME_DST_H  = 224 * GAME_SCALE;                    // 448
-constexpr int GAME_DST_X  = 0;
+constexpr int GAME_DST_X  = LEFT_PANEL_WIDTH;
 
-constexpr int TEXT_PANEL_X = GAME_DST_W;
+constexpr int TEXT_PANEL_X = LEFT_PANEL_WIDTH + GAME_DST_W;
 
 constexpr ImVec4 LABEL_COLOR{0.55f, 0.56f, 0.59f, 1.0f};
 constexpr ImVec4 VALUE_COLOR{0.46f, 0.84f, 0.77f, 1.0f};
@@ -181,14 +182,36 @@ void Display::beginFrame() {
 namespace {
 constexpr ImGuiWindowFlags kPanelWindowFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
     | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+
+// Renders a section as a titled two-column (label/value) table.
+void drawSectionTable(const DebugSection& section) {
+    ImGui::SeparatorText(section.title.c_str());
+    if (ImGui::BeginTable(section.title.c_str(), 2, ImGuiTableFlags_SizingFixedFit)) {
+        for (const auto& line : section.lines) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            const auto sep = line.find(" : ");
+            if (sep != std::string::npos) {
+                std::string label = line.substr(0, sep);
+                while (!label.empty() && label.back() == ' ') label.pop_back();
+                ImGui::TextUnformatted(label.c_str());
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextColored(VALUE_COLOR, "%s", line.substr(sep + 3).c_str());
+            } else {
+                ImGui::TextUnformatted(line.c_str());
+            }
+        }
+        ImGui::EndTable();
+    }
+}
 }
 
 DebugAction Display::drawControls(bool paused) {
     DebugAction action = DebugAction::None;
 
-    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(TEXT_PANEL_X), 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(PANEL_WIDTH), static_cast<float>(m_windowHeight)));
-    ImGui::Begin("Debug", nullptr, kPanelWindowFlags);
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(m_windowHeight)));
+    ImGui::Begin("Left", nullptr, kPanelWindowFlags);
 
     if (ImGui::Button(paused ? "Resume" : "Pause")) {
         action = DebugAction::TogglePause;
@@ -208,32 +231,31 @@ DebugAction Display::drawControls(bool paused) {
     return action;
 }
 
-void Display::drawDebugPanel(const DebugPanel& panel) {
-    ImGui::Begin("Debug", nullptr, kPanelWindowFlags); // appends to the window opened by drawControls
+void Display::drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog) {
+    ImGui::Begin("Left", nullptr, kPanelWindowFlags); // appends to the window opened by drawControls
 
     // Scrolls independently of the toolbar drawn by drawControls(), so the buttons stay pinned.
-    ImGui::BeginChild("DebugScrollRegion", ImGui::GetContentRegionAvail(), false);
+    ImGui::BeginChild("LeftScrollRegion", ImGui::GetContentRegionAvail(), false);
 
-    for (const auto& section : panel.sections) {
-        ImGui::SeparatorText(section.title.c_str());
-        if (ImGui::BeginTable(section.title.c_str(), 2, ImGuiTableFlags_SizingFixedFit)) {
-            for (const auto& line : section.lines) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                const auto sep = line.find(" : ");
-                if (sep != std::string::npos) {
-                    std::string label = line.substr(0, sep);
-                    while (!label.empty() && label.back() == ' ') label.pop_back();
-                    ImGui::TextUnformatted(label.c_str());
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextColored(VALUE_COLOR, "%s", line.substr(sep + 3).c_str());
-                } else {
-                    ImGui::TextUnformatted(line.c_str());
-                }
-            }
-            ImGui::EndTable();
+    for (const auto& section : sections) {
+        drawSectionTable(section);
+    }
+
+    if (!instructionLog.empty()) {
+        ImGui::SeparatorText("Instruction Log");
+        for (const auto& line : instructionLog) {
+            ImGui::TextUnformatted(line.c_str());
         }
     }
+
+    ImGui::EndChild();
+    ImGui::End();
+}
+
+void Display::drawRightPanel(const DebugPanel& panel) {
+    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(TEXT_PANEL_X), 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(PANEL_WIDTH), static_cast<float>(m_windowHeight)));
+    ImGui::Begin("Right", nullptr, kPanelWindowFlags);
 
     if (panel.showPalette) {
         ImGui::SeparatorText("Palette");
@@ -255,14 +277,6 @@ void Display::drawDebugPanel(const DebugPanel& panel) {
         ImGui::PopStyleVar();
     }
 
-    if (!panel.instructionLog.empty()) {
-        ImGui::SeparatorText("Instruction Log");
-        for (const auto& line : panel.instructionLog) {
-            ImGui::TextUnformatted(line.c_str());
-        }
-    }
-
-    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -288,7 +302,8 @@ void Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) 
         SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
     }
 
-    drawDebugPanel(panel);
+    drawLeftPanel(panel.sections, panel.instructionLog);
+    drawRightPanel(panel);
 
     ImGui::Render();
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), m_renderer);
