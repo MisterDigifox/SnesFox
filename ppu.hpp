@@ -188,8 +188,6 @@ private:
     std::array<uint32_t, 256 * 224> m_framebuffer{};
     mutable bool m_objRangeOver = false; // set when >32 sprites on a scanline
     bool         m_diagDone     = false; // one-shot first-active-frame diagnostic
-    int          m_winLogFrame  = 0;     // SNESFOX_WIN_LOG frame counter
-    uint8_t      m_winLogPrev[6]{};      // SNESFOX_WIN_LOG last-logged register snapshot
     uint32_t     m_vramWrites   = 0;    // total VRAM word writes (incremented per $2118/$2119 pair)
 
     uint32_t mode7DirectColorArgb(uint8_t pixel) const;

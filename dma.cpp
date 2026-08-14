@@ -1,7 +1,5 @@
 #include "dma.hpp"
 #include "bus.hpp"
-#include <cstdio>
-#include <cstdlib>
 
 // Transfer unit patterns for the 3-bit mode field (bits 2:0 of $43x0).
 // Each entry is the sequence of B-bus offsets written per "unit".
@@ -147,14 +145,8 @@ bool Dma::hdmaReadLineCount(int ch, Bus& bus) {
     Channel& c          = m_ch[ch];
     const bool indirect = (c.ctrl & 0x40) != 0;
 
-    const uint16_t readAddr = c.hdmaCurAddr;
     const uint8_t line = bus.read(c.hdmaCurBank, c.hdmaCurAddr);
     stepA(c);
-
-    if ((ch == 5 || ch == 6) && std::getenv("SNESFOX_WIN_LOG")) {
-        std::fprintf(stderr, "[HDMARD] ch=%d readAddr=%04X:%02X line=%02X\n",
-            ch, readAddr, c.hdmaCurBank, line);
-    }
 
     if (line == 0) {
         // Terminator (snes9x also has indirect special case; treat as end for now)
@@ -199,11 +191,6 @@ void Dma::beginHdmaFrame(uint8_t enableMask, Bus& bus) {
         m_ch[ch].hdmaCurAddr = m_ch[ch].srcAddr;
         m_ch[ch].hdmaCurBank = m_ch[ch].srcBank;
         m_hdmaActive[ch] = true;
-
-        if ((ch == 5 || ch == 6) && std::getenv("SNESFOX_WIN_LOG")) {
-            std::fprintf(stderr, "[HDMABEGIN] ch=%d hdmaCurAddr=%04X hdmaCurBank=%02X\n",
-                ch, m_ch[ch].hdmaCurAddr, m_ch[ch].hdmaCurBank);
-        }
 
         if (!hdmaReadLineCount(ch, bus)) {
             m_hdmaActive[ch] = false;
@@ -268,9 +255,4 @@ void Dma::writeReg(uint8_t ch, uint8_t reg, uint8_t value) {
     // srcAddr/srcBank (A1Tx/A1Bx) are purely the CPU-visible config register here — HDMA
     // playback reads/advances the separate hdmaCurAddr/hdmaCurBank cursor (see
     // beginHdmaFrame), so this write can never redirect an in-progress HDMA transfer.
-    if ((ch == 5 || ch == 6) && std::getenv("SNESFOX_WIN_LOG")) {
-        std::fprintf(stderr, "[DMAREG] ch=%u reg=%u value=%02X -> srcAddr=%04X srcBank=%02X"
-            " ctrl=%02X bBus=%02X active=%d\n",
-            ch, reg, value, c.srcAddr, c.srcBank, c.ctrl, c.bBus, m_hdmaActive[ch] ? 1 : 0);
-    }
 }

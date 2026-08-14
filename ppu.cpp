@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 // -----------------------------------------------------------------------
@@ -1147,19 +1146,6 @@ void Ppu::renderScanline(int line) {
         return;
     }
 
-    // SNESFOX_WIN_LOG=1: per-scanline trace of the window registers, logged only when
-    // a value differs from the previous scanline — lets a "glitch on one frame only"
-    // report be pinned to the exact frame/scanline/register combination that changed.
-    if (line == 0) ++m_winLogFrame;
-    if (std::getenv("SNESFOX_WIN_LOG")) {
-        const uint8_t cur[6] = {m_w12sel, m_wh[0], m_wh[1], m_wh[2], m_wh[3], m_cgswsel};
-        if (std::memcmp(cur, m_winLogPrev, sizeof(cur)) != 0) {
-            std::fprintf(stderr,
-                "[WIN] frame=%d line=%3d  W12SEL=%02X WH0=%02X WH1=%02X WH2=%02X WH3=%02X CGWSEL=%02X\n",
-                m_winLogFrame, line, cur[0], cur[1], cur[2], cur[3], cur[4], cur[5]);
-            std::memcpy(m_winLogPrev, cur, sizeof(cur));
-        }
-    }
 
     // One-shot diagnostic: print PPU state on the very first active scanline
     if (!m_diagDone && line == 0) {
