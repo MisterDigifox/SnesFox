@@ -213,6 +213,9 @@ DebugAction Display::drawControls(bool paused) {
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(m_windowHeight)));
     ImGui::Begin("Left", nullptr, kPanelWindowFlags);
 
+    if (ImGui::Button("Reset")) {
+        action = DebugAction::Reset;
+    }
     if (ImGui::Button(paused ? "Resume" : "Pause")) {
         action = DebugAction::TogglePause;
     }

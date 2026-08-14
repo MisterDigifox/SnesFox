@@ -145,6 +145,11 @@ public:
         }
     }
 
+    void clearQueue() {
+        if (m_device == 0) return;
+        SDL_ClearQueuedAudio(m_device);
+    }
+
     void pump(APU& apu) {
         if (m_device == 0) return;
 
@@ -702,6 +707,12 @@ int runEmu(const std::string& romPath) {
         if (action == DebugAction::TogglePause) {
             paused = !paused;
             audio.setPaused(paused);
+        }
+        if (action == DebugAction::Reset) {
+            bus.reset();
+            cpu.reset(bus, resetVector);
+            instructionLog.clear();
+            audio.clearQueue();
         }
         if (action == DebugAction::StepOne && paused) {
             stepOnce = true;

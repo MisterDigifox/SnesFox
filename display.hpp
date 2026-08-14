@@ -10,7 +10,8 @@ enum class DebugAction {
     None,
     TogglePause,
     StepOne,
-    NextFrame
+    NextFrame,
+    Reset
 };
 
 // A titled group of lines rendered as a two-column (label/value) table.
