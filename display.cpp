@@ -277,17 +277,14 @@ void Display::drawRightPanel(const DebugPanel& panel) {
                 ImGui::PushID(col);
                 const int index = row * PALETTE_COLS + col;
                 const uint16_t raw = panel.palette[index];
-                const int r8 = (raw & 0x1F) * 255 / 31;
-                const int g8 = ((raw >> 5) & 0x1F) * 255 / 31;
-                const int b8 = ((raw >> 10) & 0x1F) * 255 / 31;
 
                 if (ImGui::ColorButton("##swatch", bgr555ToImVec4(raw),
                                        ImGuiColorEditFlags_AlphaOpaque,
                                        ImVec2(PALETTE_SWATCH_SIZE, PALETTE_SWATCH_SIZE))) {
                     m_editingPaletteIndex = index;
-                    m_editR = r8;
-                    m_editG = g8;
-                    m_editB = b8;
+                    m_editR = raw & 0x1F;
+                    m_editG = (raw >> 5) & 0x1F;
+                    m_editB = (raw >> 10) & 0x1F;
                     openPaletteEditor = true;
                 }
                 ImGui::PopID();
@@ -303,13 +300,13 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             ImGui::OpenPopup("EditPaletteColor");
         }
         if (ImGui::BeginPopup("EditPaletteColor")) {
-            ImGui::Text("Edit palette color #%d", m_editingPaletteIndex);
+            ImGui::Text("Edit palette color #%d (RGB5, 0-31)", m_editingPaletteIndex);
             ImGui::InputInt("R", &m_editR);
             ImGui::InputInt("G", &m_editG);
             ImGui::InputInt("B", &m_editB);
-            m_editR = std::clamp(m_editR, 0, 255);
-            m_editG = std::clamp(m_editG, 0, 255);
-            m_editB = std::clamp(m_editB, 0, 255);
+            m_editR = std::clamp(m_editR, 0, 31);
+            m_editG = std::clamp(m_editG, 0, 31);
+            m_editB = std::clamp(m_editB, 0, 31);
             if (ImGui::Button("Copy")) {
                 char clipboardText[16];
                 std::snprintf(clipboardText, sizeof(clipboardText), "%d, %d, %d", m_editR, m_editG, m_editB);
@@ -317,9 +314,9 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             }
             ImGui::SameLine();
             if (ImGui::Button("Apply")) {
-                const uint16_t r5 = static_cast<uint16_t>(m_editR * 31 / 255);
-                const uint16_t g5 = static_cast<uint16_t>(m_editG * 31 / 255);
-                const uint16_t b5 = static_cast<uint16_t>(m_editB * 31 / 255);
+                const uint16_t r5 = static_cast<uint16_t>(m_editR);
+                const uint16_t g5 = static_cast<uint16_t>(m_editG);
+                const uint16_t b5 = static_cast<uint16_t>(m_editB);
                 const uint16_t newRaw = static_cast<uint16_t>(r5 | (g5 << 5) | (b5 << 10));
                 m_pendingPaletteEdit = PaletteEdit{true, m_editingPaletteIndex, newRaw};
                 m_editingPaletteIndex = -1;
