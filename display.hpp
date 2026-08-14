@@ -30,7 +30,7 @@ struct DebugPanel {
     std::vector<std::string> instructionLog;
 };
 
-// Result of double-clicking a palette swatch and hitting Apply in the editor popup.
+// Result of clicking a palette swatch and hitting Apply in the editor popup.
 struct PaletteEdit {
     bool applied = false;
     int index = 0;
@@ -44,6 +44,9 @@ public:
     bool processEvents(DebugAction& action);
     // Starts the ImGui frame; call once per iteration before drawControls/presentWithFrame.
     void beginFrame();
+    // True while an ImGui widget (e.g. the palette editor popup's text fields) has keyboard focus —
+    // the emulated joypad should ignore keyboard input for the frame while this is true.
+    bool wantsKeyboardCapture() const;
     // Draws the Pause/Resume/Step/Next Frame toolbar pinned at the top of the left menu; returns
     // which button (if any) was clicked.
     DebugAction drawControls(bool paused);

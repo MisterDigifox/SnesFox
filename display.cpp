@@ -165,7 +165,7 @@ bool Display::processEvents(DebugAction& action) {
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
         if (event.type == SDL_QUIT) return false;
-        if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
+        if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !ImGui::GetIO().WantCaptureKeyboard) {
             switch (event.key.keysym.sym) {
                 case SDLK_SPACE:
                     action = DebugAction::StepOne;
@@ -174,6 +174,10 @@ bool Display::processEvents(DebugAction& action) {
         }
     }
     return true;
+}
+
+bool Display::wantsKeyboardCapture() const {
+    return ImGui::GetIO().WantCaptureKeyboard;
 }
 
 void Display::beginFrame() {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <fstream>
@@ -37,7 +38,8 @@ constexpr int AUDIO_CHANNELS = 2;
 constexpr int AUDIO_QUEUE_LOW_FRAMES = AUDIO_SAMPLE_RATE / 30;
 constexpr int AUDIO_QUEUE_MAX_FRAMES = AUDIO_SAMPLE_RATE / 4;
 
-uint16_t sampleJoy1() {
+uint16_t sampleJoy1(bool suppress) {
+    if (suppress) return 0;
     SDL_PumpEvents();
     const uint8_t* k = SDL_GetKeyboardState(nullptr);
     uint16_t joy = 0;
@@ -56,7 +58,8 @@ uint16_t sampleJoy1() {
     return joy;
 }
 
-uint16_t sampleJoy2() {
+uint16_t sampleJoy2(bool suppress) {
+    if (suppress) return 0;
     SDL_PumpEvents();
     const uint8_t* k = SDL_GetKeyboardState(nullptr);
     uint16_t joy = 0;
@@ -80,12 +83,12 @@ constexpr int LOG_SIZE = 4;
 constexpr uint64_t DEFAULT_COV_FRAMES = 600;
 constexpr uint64_t COV_MAX_STEPS = 20000000ull;
 
-inline void advanceCpuScheduling(Bus& bus, CPU& cpu, bool updateJoyOnNmi) {
+inline void advanceCpuScheduling(Bus& bus, CPU& cpu, bool updateJoyOnNmi, bool suppressJoypad = false) {
     const bool nmi = bus.stepPeripherals(cpu.cycles());
     if (nmi) {
         if (updateJoyOnNmi) {
-            bus.setJoy1(sampleJoy1());
-            bus.setJoy2(sampleJoy2());
+            bus.setJoy1(sampleJoy1(suppressJoypad));
+            bus.setJoy2(sampleJoy2(suppressJoypad));
         }
         cpu.triggerNmi(bus);
     }
@@ -703,6 +706,7 @@ int runEmu(const std::string& romPath) {
         if (uiAction != DebugAction::None) {
             action = uiAction;
         }
+        const bool suppressJoypad = display.wantsKeyboardCapture();
 
         if (action == DebugAction::TogglePause) {
             paused = !paused;
@@ -726,7 +730,7 @@ int runEmu(const std::string& romPath) {
 
             while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
                 cpu.step(bus);
-                advanceCpuScheduling(bus, cpu, true);
+                advanceCpuScheduling(bus, cpu, true, suppressJoypad);
             }
             audio.pump(bus.apu());
         } else if (stepOnce) {
@@ -734,7 +738,7 @@ int runEmu(const std::string& romPath) {
 
             const uint32_t pcBefore = cpu.pc24();
             cpu.step(bus);
-            advanceCpuScheduling(bus, cpu, true);
+            advanceCpuScheduling(bus, cpu, true, suppressJoypad);
             logInstruction(pcBefore);
         } else if (nextFrameOnce) {
             nextFrameOnce = false;
@@ -743,7 +747,7 @@ int runEmu(const std::string& romPath) {
             while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
                 const uint32_t pcBefore = cpu.pc24();
                 cpu.step(bus);
-                advanceCpuScheduling(bus, cpu, true);
+                advanceCpuScheduling(bus, cpu, true, suppressJoypad);
                 logInstruction(pcBefore);
             }
         }
