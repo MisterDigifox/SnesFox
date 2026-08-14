@@ -352,8 +352,8 @@ void Display::drawRightPanel(const DebugPanel& panel) {
 }
 
 namespace {
-constexpr ImGuiWindowFlags kBottomPanelFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
-    | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+constexpr ImGuiWindowFlags kBottomPanelFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+    | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
 }
 
 void Display::drawBottomPanel(const DebugPanel& panel) {
@@ -363,6 +363,33 @@ void Display::drawBottomPanel(const DebugPanel& panel) {
     ImGui::SetNextWindowPos(ImVec2(0.0f, static_cast<float>(WINDOW_HEIGHT)));
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
     ImGui::Begin("Tiles Viewer", nullptr, kBottomPanelFlags);
+
+    // Layer visibility toggles: click to hide/show that layer in the emulated game view.
+    // Highlighted red while hidden. This only affects the debug display (Ppu's
+    // m_debugLayerDisable override) — it never touches the actual TM/TS register values,
+    // so the game itself still sees whatever it wrote there.
+    static constexpr const char* kLayerLabels[5] = {"BG0", "BG1", "BG2", "BG3", "OAM"};
+    for (int i = 0; i < 5; ++i) {
+        const uint8_t bit = static_cast<uint8_t>(1u << i);
+        const bool disabled = (m_layerDisableMask & bit) != 0;
+        ImGui::PushID(i);
+        if (disabled) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.25f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.32f, 0.32f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.20f, 0.20f, 1.0f));
+        }
+        if (ImGui::Button(kLayerLabels[i])) {
+            m_layerDisableMask ^= bit;
+        }
+        if (disabled) {
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::PopID();
+        if (i != 4) ImGui::SameLine();
+    }
+
+    ImGui::SeparatorText("Tiles Viewer");
+
     ImGui::BeginChild("TilesScrollRegion", ImGui::GetContentRegionAvail(), false);
 
     if (panel.showTiles) {

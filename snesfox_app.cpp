@@ -839,6 +839,7 @@ int runEmu(const std::string& initialRomPath) {
             if (paletteEdit.applied) {
                 bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);
             }
+            bus.ppu().setDebugLayerDisable(display.layerDisableMask());
 
             const uint64_t frameEndPerf = SDL_GetPerformanceCounter();
             const double elapsedMs = static_cast<double>(frameEndPerf - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);

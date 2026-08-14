@@ -64,6 +64,10 @@ public:
     // Left menu (ROM/CPU/PPU sections + instruction log) — game frame — right menu (palette).
     // Returns the pending palette edit (if the user hit Apply in the swatch editor popup this frame).
     PaletteEdit presentWithFrame(const uint32_t* pixels, const DebugPanel& panel);
+    // BG0-3/OAM visibility toggles from the Tiles Viewer panel (bit0-3 = BG0-3, bit4 = OAM) —
+    // apply this to Ppu::setDebugLayerDisable each frame to hide the corresponding layer(s)
+    // in the emulated game view.
+    uint8_t layerDisableMask() const { return m_layerDisableMask; }
 private:
     void drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog);
     void drawRightPanel(const DebugPanel& panel);
@@ -82,4 +86,5 @@ private:
     int m_editB = 0;
     PaletteEdit m_pendingPaletteEdit;
     std::string m_pendingRomLoadPath; // set when the Load popup's file selection is clicked
+    uint8_t m_layerDisableMask = 0; // bit0-3 = BG0-3, bit4 = OAM; toggled by the Tiles Viewer buttons
 };

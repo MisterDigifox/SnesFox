@@ -49,6 +49,11 @@ public:
     // Debug-only live patch (e.g. palette editor); bypasses the normal $2121/$2122 write path.
     void setCgramEntry(int index, uint16_t bgr555) { m_cgram[static_cast<size_t>(index)] = bgr555; }
 
+    // Debug-only layer visibility override (bit0-3 = BG0-3, bit4 = OAM/sprites) — forces those
+    // layers off in the composited framebuffer regardless of TM/TS, without touching the actual
+    // $212C/$212D register values the game reads back.
+    void setDebugLayerDisable(uint8_t mask) { m_debugLayerDisable = mask; }
+
     // -------------------------------------------------------
     // Rendering — called by Bus::stepPeripherals each scanline
     // -------------------------------------------------------
@@ -188,6 +193,7 @@ private:
     std::array<uint32_t, 256 * 224> m_framebuffer{};
     mutable bool m_objRangeOver = false; // set when >32 sprites on a scanline
     bool         m_diagDone     = false; // one-shot first-active-frame diagnostic
+    uint8_t      m_debugLayerDisable = 0; // bit0-3 = BG0-3, bit4 = OAM (debug UI override)
     uint32_t     m_vramWrites   = 0;    // total VRAM word writes (incremented per $2118/$2119 pair)
 
     uint32_t mode7DirectColorArgb(uint8_t pixel) const;

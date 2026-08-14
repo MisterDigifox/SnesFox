@@ -1185,7 +1185,8 @@ void Ppu::renderScanline(int line) {
     LayerPixel  bg0[256]{}, bg1[256]{}, bg2[256]{}, bg3[256]{};
     SpritePixel spr[256]{};
 
-    const uint8_t tmts = static_cast<uint8_t>(static_cast<unsigned>(m_tm) | static_cast<unsigned>(m_ts));
+    const uint8_t tmts = static_cast<uint8_t>(
+        (static_cast<unsigned>(m_tm) | static_cast<unsigned>(m_ts)) & ~static_cast<unsigned>(m_debugLayerDisable));
 
     switch (m_bgMode) {
     case 0:
