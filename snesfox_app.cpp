@@ -704,130 +704,150 @@ int runCov(const std::string& romPath, const std::string& covPath, uint64_t fram
     return 0;
 }
 
-int runEmu(const std::string& romPath) {
-    Rom rom(romPath);
-    const auto& data = rom.data();
-    if (data.size() < 0x10000) {
-        throw std::runtime_error("ROM: unexpected size");
-    }
-
-    printRomInfo(rom, data);
-
-    const auto headerLines = HeaderParser::toLines(data);
-    const RomMapping mapping = HeaderParser::detect(data);
-    const bool isLoRom = (mapping == RomMapping::LoROM);
-    const uint16_t resetVector = readResetVector(data, isLoRom);
-
+int runEmu(const std::string& initialRomPath) {
     printMissingCpuOpcodes(cpuOpcodesTable);
 
-    std::string savePath = romPath;
-    const auto dot = savePath.rfind('.');
-    if (dot != std::string::npos)
-        savePath.replace(dot, std::string::npos, ".sav");
-    else
-        savePath += ".sav";
-
-    Bus bus(data, savePath);
-    bus.reset();
-
-    CPU cpu;
-    cpu.reset(bus, resetVector);
-
-    std::deque<std::string> instructionLog;
-    bool paused = false;
-    bool stepOnce = false;
-    bool nextFrameOnce = false;
-
-    auto logInstruction = [&](uint32_t pcBefore) {
-        if (!instructionLog.empty() && instructionLog.front().rfind("> ", 0) == 0) {
-            instructionLog.front().replace(0, 2, "  ");
-        }
-        instructionLog.push_front(formatDisasmLine(pcBefore, cpu, true));
-        if (instructionLog.size() > LOG_SIZE) {
-            instructionLog.pop_back();
-        }
-    };
-
+    // Display/audio persist across a ROM swap (the "Load" button) — only the ROM-derived
+    // state below gets torn down and rebuilt, same as this function's original one-shot
+    // setup used to do exactly once.
     Display display("snesfox");
     AudioOutput audio;
 
-    // Pace the loop to the SNES's real NTSC refresh rate rather than running
-    // as fast as the host CPU allows (SDL_RENDERER_PRESENTVSYNC alone isn't
-    // reliable pacing — it tracks the display's refresh rate, not 60.0988Hz,
-    // and some platforms/drivers ignore it entirely).
-    constexpr double kTargetFps = 60.0988;
-    const uint64_t perfFreq = SDL_GetPerformanceFrequency();
-    uint64_t frameStartPerf = SDL_GetPerformanceCounter();
+    std::string romPath = initialRomPath;
+    bool loadRequested = true;
 
-    bool running = true;
-    while (running) {
-        DebugAction action = DebugAction::None;
-        running = display.processEvents(action);
+    while (loadRequested) {
+        loadRequested = false;
 
-        display.beginFrame();
-        const DebugAction uiAction = display.drawControls(paused);
-        if (uiAction != DebugAction::None) {
-            action = uiAction;
-        }
-        const bool suppressJoypad = display.wantsKeyboardCapture();
-
-        if (action == DebugAction::TogglePause) {
-            paused = !paused;
-            audio.setPaused(paused);
-        }
-        if (action == DebugAction::Reset) {
-            bus.reset();
-            cpu.reset(bus, resetVector);
-            instructionLog.clear();
-            audio.clearQueue();
-        }
-        if (action == DebugAction::StepOne && paused) {
-            stepOnce = true;
-        }
-        if (action == DebugAction::NextFrame && paused) {
-            nextFrameOnce = true;
+        Rom rom(romPath);
+        const auto& data = rom.data();
+        if (data.size() < 0x10000) {
+            throw std::runtime_error("ROM: unexpected size");
         }
 
-        if (!paused) {
-            const uint64_t frameStartCycles = cpu.cycles();
+        printRomInfo(rom, data);
 
-            while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
-                cpu.step(bus);
-                advanceCpuScheduling(bus, cpu, true, suppressJoypad);
+        const auto headerLines = HeaderParser::toLines(data);
+        const RomMapping mapping = HeaderParser::detect(data);
+        const bool isLoRom = (mapping == RomMapping::LoROM);
+        const uint16_t resetVector = readResetVector(data, isLoRom);
+
+        std::string savePath = romPath;
+        const auto dot = savePath.rfind('.');
+        if (dot != std::string::npos)
+            savePath.replace(dot, std::string::npos, ".sav");
+        else
+            savePath += ".sav";
+
+        Bus bus(data, savePath);
+        bus.reset();
+
+        CPU cpu;
+        cpu.reset(bus, resetVector);
+
+        std::deque<std::string> instructionLog;
+        bool paused = false;
+        bool stepOnce = false;
+        bool nextFrameOnce = false;
+        audio.clearQueue();
+
+        auto logInstruction = [&](uint32_t pcBefore) {
+            if (!instructionLog.empty() && instructionLog.front().rfind("> ", 0) == 0) {
+                instructionLog.front().replace(0, 2, "  ");
             }
-            audio.pump(bus.apu());
-        } else if (stepOnce) {
-            stepOnce = false;
+            instructionLog.push_front(formatDisasmLine(pcBefore, cpu, true));
+            if (instructionLog.size() > LOG_SIZE) {
+                instructionLog.pop_back();
+            }
+        };
 
-            const uint32_t pcBefore = cpu.pc24();
-            cpu.step(bus);
-            advanceCpuScheduling(bus, cpu, true, suppressJoypad);
-            logInstruction(pcBefore);
-        } else if (nextFrameOnce) {
-            nextFrameOnce = false;
+        // Pace the loop to the SNES's real NTSC refresh rate rather than running
+        // as fast as the host CPU allows (SDL_RENDERER_PRESENTVSYNC alone isn't
+        // reliable pacing — it tracks the display's refresh rate, not 60.0988Hz,
+        // and some platforms/drivers ignore it entirely).
+        constexpr double kTargetFps = 60.0988;
+        const uint64_t perfFreq = SDL_GetPerformanceFrequency();
+        uint64_t frameStartPerf = SDL_GetPerformanceCounter();
 
-            const uint64_t frameStartCycles = cpu.cycles();
-            while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
+        bool running = true;
+        while (running) {
+            DebugAction action = DebugAction::None;
+            running = display.processEvents(action);
+
+            display.beginFrame();
+            const DebugAction uiAction = display.drawControls(paused);
+            if (uiAction != DebugAction::None) {
+                action = uiAction;
+            }
+            const bool suppressJoypad = display.wantsKeyboardCapture();
+
+            if (action == DebugAction::LoadRom) {
+                romPath = display.pendingRomLoadPath();
+                loadRequested = true;
+                running = false;
+                // Fall through to finish this frame normally (still need the matching
+                // presentWithFrame()/ImGui::Render() for the NewFrame() already started
+                // above via beginFrame() — skipping it here trips ImGui's own assertion
+                // on the next iteration's NewFrame() call after the ROM is swapped in).
+            }
+            if (action == DebugAction::TogglePause) {
+                paused = !paused;
+                audio.setPaused(paused);
+            }
+            if (action == DebugAction::Reset) {
+                bus.reset();
+                cpu.reset(bus, resetVector);
+                instructionLog.clear();
+                audio.clearQueue();
+            }
+            if (action == DebugAction::StepOne && paused) {
+                stepOnce = true;
+            }
+            if (action == DebugAction::NextFrame && paused) {
+                nextFrameOnce = true;
+            }
+
+            if (!paused) {
+                const uint64_t frameStartCycles = cpu.cycles();
+
+                while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
+                    cpu.step(bus);
+                    advanceCpuScheduling(bus, cpu, true, suppressJoypad);
+                }
+                audio.pump(bus.apu());
+            } else if (stepOnce) {
+                stepOnce = false;
+
                 const uint32_t pcBefore = cpu.pc24();
                 cpu.step(bus);
                 advanceCpuScheduling(bus, cpu, true, suppressJoypad);
                 logInstruction(pcBefore);
+            } else if (nextFrameOnce) {
+                nextFrameOnce = false;
+
+                const uint64_t frameStartCycles = cpu.cycles();
+                while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
+                    const uint32_t pcBefore = cpu.pc24();
+                    cpu.step(bus);
+                    advanceCpuScheduling(bus, cpu, true, suppressJoypad);
+                    logInstruction(pcBefore);
+                }
             }
-        }
 
-        const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), instructionLog, paused);
-        const PaletteEdit paletteEdit = display.presentWithFrame(bus.ppu().framebuffer(), panel);
-        if (paletteEdit.applied) {
-            bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);
-        }
+            const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), instructionLog, paused);
+            const PaletteEdit paletteEdit = display.presentWithFrame(bus.ppu().framebuffer(), panel);
+            if (paletteEdit.applied) {
+                bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);
+            }
 
-        const uint64_t frameEndPerf = SDL_GetPerformanceCounter();
-        const double elapsedMs = static_cast<double>(frameEndPerf - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
-        constexpr double kTargetFrameMs = 1000.0 / kTargetFps;
-        if (elapsedMs < kTargetFrameMs) {
-            SDL_Delay(static_cast<uint32_t>(kTargetFrameMs - elapsedMs));
+            const uint64_t frameEndPerf = SDL_GetPerformanceCounter();
+            const double elapsedMs = static_cast<double>(frameEndPerf - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
+            constexpr double kTargetFrameMs = 1000.0 / kTargetFps;
+            if (elapsedMs < kTargetFrameMs) {
+                SDL_Delay(static_cast<uint32_t>(kTargetFrameMs - elapsedMs));
+            }
+            frameStartPerf = SDL_GetPerformanceCounter();
         }
-        frameStartPerf = SDL_GetPerformanceCounter();
     }
 
     return 0;

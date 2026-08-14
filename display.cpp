@@ -1,6 +1,8 @@
 #include "display.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <stdexcept>
 #include "imgui.h"
 #include "backends/imgui_impl_sdl2.h"
@@ -217,12 +219,51 @@ void drawSectionTable(const DebugSection& section) {
 }
 }
 
+namespace {
+// Lists .sfc/.smc files in the current working directory, sorted, for the Load popup.
+std::vector<std::string> findRomFilesInCwd() {
+    std::vector<std::string> names;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(".", ec)) {
+        if (ec || !entry.is_regular_file()) continue;
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext == ".sfc" || ext == ".smc") {
+            names.push_back(entry.path().filename().string());
+        }
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+}
+
 DebugAction Display::drawControls(bool paused) {
     DebugAction action = DebugAction::None;
+    m_pendingRomLoadPath.clear();
 
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(WINDOW_HEIGHT)));
     ImGui::Begin("Left", nullptr, kPanelWindowFlags);
+
+    if (ImGui::Button("Load")) {
+        ImGui::OpenPopup("LoadRomPopup");
+    }
+    if (ImGui::BeginPopup("LoadRomPopup")) {
+        const std::vector<std::string> romFiles = findRomFilesInCwd();
+        if (romFiles.empty()) {
+            ImGui::TextDisabled("No .sfc/.smc files found here");
+        } else {
+            for (const auto& name : romFiles) {
+                if (ImGui::Selectable(name.c_str())) {
+                    m_pendingRomLoadPath = name;
+                    action = DebugAction::LoadRom;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
 
     if (ImGui::Button("Reset")) {
         action = DebugAction::Reset;

@@ -11,7 +11,8 @@ enum class DebugAction {
     TogglePause,
     StepOne,
     NextFrame,
-    Reset
+    Reset,
+    LoadRom
 };
 
 // A titled group of lines rendered as a two-column (label/value) table.
@@ -55,9 +56,11 @@ public:
     // True while an ImGui widget (e.g. the palette editor popup's text fields) has keyboard focus —
     // the emulated joypad should ignore keyboard input for the frame while this is true.
     bool wantsKeyboardCapture() const;
-    // Draws the Pause/Resume/Step/Next Frame toolbar pinned at the top of the left menu; returns
-    // which button (if any) was clicked.
+    // Draws the Load/Reset/Pause/Resume/Step/Next Frame toolbar pinned at the top of the left
+    // menu; returns which button (if any) was clicked. If the returned action is LoadRom, the
+    // selected ROM's path (relative to the current working directory) is in pendingRomLoadPath().
     DebugAction drawControls(bool paused);
+    const std::string& pendingRomLoadPath() const { return m_pendingRomLoadPath; }
     // Left menu (ROM/CPU/PPU sections + instruction log) — game frame — right menu (palette).
     // Returns the pending palette edit (if the user hit Apply in the swatch editor popup this frame).
     PaletteEdit presentWithFrame(const uint32_t* pixels, const DebugPanel& panel);
@@ -78,4 +81,5 @@ private:
     int m_editG = 0;
     int m_editB = 0;
     PaletteEdit m_pendingPaletteEdit;
+    std::string m_pendingRomLoadPath; // set when the Load popup's file selection is clicked
 };
