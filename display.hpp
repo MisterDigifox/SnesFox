@@ -45,6 +45,7 @@ public:
 private:
     void drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog);
     void drawRightPanel(const DebugPanel& panel);
+    void drawBottomPanel();
 
     SDL_Window*   m_window      = nullptr;
     SDL_Renderer* m_renderer    = nullptr;

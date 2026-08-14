@@ -10,7 +10,8 @@ namespace {
 constexpr int scale23(int v) { return (v * 2 + 1) / 3; }
 
 // Baseline window height keeps scaled SNES framebuffer centred with proportional inset (~32 px).
-constexpr int WINDOW_HEIGHT = scale23(768);
+constexpr int WINDOW_HEIGHT = scale23(768); // height of the top area (left/right menus + game frame)
+constexpr int BOTTOM_PANEL_HEIGHT = scale23(220);
 constexpr int LEFT_PANEL_WIDTH = scale23(440);
 constexpr int PANEL_WIDTH   = scale23(700);
 
@@ -23,6 +24,7 @@ constexpr int TEXT_PANEL_X = LEFT_PANEL_WIDTH + GAME_DST_W;
 
 constexpr ImVec4 LABEL_COLOR{0.55f, 0.56f, 0.59f, 1.0f};
 constexpr ImVec4 VALUE_COLOR{0.46f, 0.84f, 0.77f, 1.0f};
+constexpr SDL_Color DIVIDER_COLOR{61, 64, 74, 255};
 constexpr float  PALETTE_SWATCH_SIZE = 20.0f;
 constexpr float  PALETTE_SWATCH_SPACING = 3.0f; // tight enough for a "Pal NN" label + 16 swatches on one row
 constexpr int    PALETTE_ROWS = 16;
@@ -40,7 +42,7 @@ ImVec4 bgr555ToImVec4(uint16_t c) {
 void applyModernDarkTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
 
-    style.WindowRounding    = 8.0f;
+    style.WindowRounding    = 0.0f;
     style.ChildRounding     = 6.0f;
     style.FrameRounding     = 6.0f;
     style.PopupRounding     = 6.0f;
@@ -120,7 +122,7 @@ Display::Display(const std::string& title) {
     }
 
     m_windowWidth = TEXT_PANEL_X + PANEL_WIDTH;
-    m_windowHeight = WINDOW_HEIGHT;
+    m_windowHeight = WINDOW_HEIGHT + BOTTOM_PANEL_HEIGHT;
 
     m_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                 m_windowWidth, m_windowHeight, SDL_WINDOW_SHOWN);
@@ -210,7 +212,7 @@ DebugAction Display::drawControls(bool paused) {
     DebugAction action = DebugAction::None;
 
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(m_windowHeight)));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(WINDOW_HEIGHT)));
     ImGui::Begin("Left", nullptr, kPanelWindowFlags);
 
     if (ImGui::Button("Reset")) {
@@ -257,7 +259,7 @@ void Display::drawLeftPanel(const std::vector<DebugSection>& sections, const std
 
 void Display::drawRightPanel(const DebugPanel& panel) {
     ImGui::SetNextWindowPos(ImVec2(static_cast<float>(TEXT_PANEL_X), 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(PANEL_WIDTH), static_cast<float>(m_windowHeight)));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(PANEL_WIDTH), static_cast<float>(WINDOW_HEIGHT)));
     ImGui::Begin("Right", nullptr, kPanelWindowFlags);
 
     if (panel.showPalette) {
@@ -283,6 +285,19 @@ void Display::drawRightPanel(const DebugPanel& panel) {
     ImGui::End();
 }
 
+namespace {
+constexpr ImGuiWindowFlags kBottomPanelFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+    | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+}
+
+void Display::drawBottomPanel() {
+    ImGui::SetNextWindowPos(ImVec2(0.0f, static_cast<float>(WINDOW_HEIGHT)));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(m_windowWidth), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
+    ImGui::Begin("Tiles Viewer", nullptr, kBottomPanelFlags);
+    ImGui::TextDisabled("(coming soon)");
+    ImGui::End();
+}
+
 void Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) {
     // Create streaming texture once
     if (!m_frameTex) {
@@ -300,15 +315,23 @@ void Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) 
 
     if (m_frameTex && pixels) {
         SDL_UpdateTexture(m_frameTex, nullptr, pixels, 256 * static_cast<int>(sizeof(uint32_t)));
-        const int gameDstY = std::max(0, (m_windowHeight - GAME_DST_H) / 2);
+        const int gameDstY = std::max(0, (WINDOW_HEIGHT - GAME_DST_H) / 2);
         const SDL_Rect dst{GAME_DST_X, gameDstY, GAME_DST_W, GAME_DST_H};
         SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
     }
 
     drawLeftPanel(panel.sections, panel.instructionLog);
     drawRightPanel(panel);
+    drawBottomPanel();
 
     ImGui::Render();
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), m_renderer);
+
+    // Drawn on top of the ImGui panels so they stay visible above each panel's own background.
+    SDL_SetRenderDrawColor(m_renderer, DIVIDER_COLOR.r, DIVIDER_COLOR.g, DIVIDER_COLOR.b, DIVIDER_COLOR.a);
+    SDL_RenderDrawLine(m_renderer, 0, WINDOW_HEIGHT, m_windowWidth, WINDOW_HEIGHT);
+    SDL_RenderDrawLine(m_renderer, LEFT_PANEL_WIDTH, 0, LEFT_PANEL_WIDTH, WINDOW_HEIGHT);
+    SDL_RenderDrawLine(m_renderer, TEXT_PANEL_X, 0, TEXT_PANEL_X, WINDOW_HEIGHT);
+
     SDL_RenderPresent(m_renderer);
 }
