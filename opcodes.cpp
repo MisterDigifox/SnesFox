@@ -303,7 +303,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x00, "NOP", 1, AddrMode::Implied, 2);
     setOp(ops, 0x01, "TCALL0", 1, AddrMode::Implied, 8);
     setOp(ops, 0x02, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x03, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x03, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x04, "OR", 2, AddrMode::DirectPage, 3);
     setOp(ops, 0x05, "OR", 3, AddrMode::Absolute, 4);
     setOp(ops, 0x06, "OR", 1, AddrMode::SpcIndirectX, 3);
@@ -319,7 +319,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x10, "BPL", 2, AddrMode::Relative8, 2);
     setOp(ops, 0x11, "TCALL1", 1, AddrMode::Implied, 8);
     setOp(ops, 0x12, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x13, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x13, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x14, "OR", 2, AddrMode::DirectPageX, 4);
     setOp(ops, 0x15, "OR", 3, AddrMode::AbsoluteX, 5);
     setOp(ops, 0x16, "OR", 3, AddrMode::AbsoluteY, 5);
@@ -335,7 +335,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x20, "CLRP", 1, AddrMode::Implied, 2);
     setOp(ops, 0x21, "TCALL2", 1, AddrMode::Implied, 8);
     setOp(ops, 0x22, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x23, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x23, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x24, "AND", 2, AddrMode::DirectPage, 3);
     setOp(ops, 0x25, "AND", 3, AddrMode::Absolute, 4);
     setOp(ops, 0x26, "AND", 1, AddrMode::SpcIndirectX, 3);
@@ -351,7 +351,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x30, "BMI", 2, AddrMode::Relative8, 2);
     setOp(ops, 0x31, "TCALL3", 1, AddrMode::Implied, 8);
     setOp(ops, 0x32, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x33, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x33, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x34, "AND", 2, AddrMode::DirectPageX, 4);
     setOp(ops, 0x35, "AND", 3, AddrMode::AbsoluteX, 5);
     setOp(ops, 0x36, "AND", 3, AddrMode::AbsoluteY, 5);
@@ -367,7 +367,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x40, "SETP", 1, AddrMode::Implied, 2);
     setOp(ops, 0x41, "TCALL4", 1, AddrMode::Implied, 8);
     setOp(ops, 0x42, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x43, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x43, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x44, "EOR", 2, AddrMode::DirectPage, 3);
     setOp(ops, 0x45, "EOR", 3, AddrMode::Absolute, 4);
     setOp(ops, 0x46, "EOR", 1, AddrMode::SpcIndirectX, 3);
@@ -383,7 +383,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x50, "BVC", 2, AddrMode::Relative8, 2);
     setOp(ops, 0x51, "TCALL5", 1, AddrMode::Implied, 8);
     setOp(ops, 0x52, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x53, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x53, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x54, "EOR", 2, AddrMode::DirectPageX, 4);
     setOp(ops, 0x55, "EOR", 3, AddrMode::AbsoluteX, 5);
     setOp(ops, 0x56, "EOR", 3, AddrMode::AbsoluteY, 5);
@@ -399,7 +399,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x60, "CLRC", 1, AddrMode::Implied, 2);
     setOp(ops, 0x61, "TCALL6", 1, AddrMode::Implied, 8);
     setOp(ops, 0x62, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x63, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x63, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x64, "CMP", 2, AddrMode::DirectPage, 3);
     setOp(ops, 0x65, "CMP", 3, AddrMode::Absolute, 4);
     setOp(ops, 0x66, "CMP", 1, AddrMode::SpcIndirectX, 3);
@@ -415,7 +415,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x70, "BVS", 2, AddrMode::Relative8, 2);
     setOp(ops, 0x71, "TCALL7", 1, AddrMode::Implied, 8);
     setOp(ops, 0x72, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x73, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x73, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x74, "CMP", 2, AddrMode::DirectPageX, 4);
     setOp(ops, 0x75, "CMP", 3, AddrMode::AbsoluteX, 5);
     setOp(ops, 0x76, "CMP", 3, AddrMode::AbsoluteY, 5);
@@ -431,7 +431,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x80, "SETC", 1, AddrMode::Implied, 2);
     setOp(ops, 0x81, "TCALL8", 1, AddrMode::Implied, 8);
     setOp(ops, 0x82, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x83, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x83, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x84, "ADC", 2, AddrMode::DirectPage, 3);
     setOp(ops, 0x85, "ADC", 3, AddrMode::Absolute, 4);
     setOp(ops, 0x86, "ADC", 1, AddrMode::SpcIndirectX, 3);
@@ -447,7 +447,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0x90, "BCC", 2, AddrMode::Relative8, 2);
     setOp(ops, 0x91, "TCALL9", 1, AddrMode::Implied, 8);
     setOp(ops, 0x92, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0x93, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0x93, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0x94, "ADC", 2, AddrMode::DirectPageX, 4);
     setOp(ops, 0x95, "ADC", 3, AddrMode::AbsoluteX, 5);
     setOp(ops, 0x96, "ADC", 3, AddrMode::AbsoluteY, 5);
@@ -463,7 +463,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0xA0, "EI", 1, AddrMode::Implied, 3);
     setOp(ops, 0xA1, "TCALL10", 1, AddrMode::Implied, 8);
     setOp(ops, 0xA2, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0xA3, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0xA3, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0xA4, "SBC", 2, AddrMode::DirectPage, 3);
     setOp(ops, 0xA5, "SBC", 3, AddrMode::Absolute, 4);
     setOp(ops, 0xA6, "SBC", 1, AddrMode::SpcIndirectX, 3);
@@ -479,7 +479,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0xB0, "BCS", 2, AddrMode::Relative8, 2);
     setOp(ops, 0xB1, "TCALL11", 1, AddrMode::Implied, 8);
     setOp(ops, 0xB2, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0xB3, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0xB3, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0xB4, "SBC", 2, AddrMode::DirectPageX, 4);
     setOp(ops, 0xB5, "SBC", 3, AddrMode::AbsoluteX, 5);
     setOp(ops, 0xB6, "SBC", 3, AddrMode::AbsoluteY, 5);
@@ -495,7 +495,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0xC0, "DI", 1, AddrMode::Implied, 3);
     setOp(ops, 0xC1, "TCALL12", 1, AddrMode::Implied, 8);
     setOp(ops, 0xC2, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0xC3, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0xC3, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0xC4, "MOV", 2, AddrMode::DirectPage, 4);
     setOp(ops, 0xC5, "MOV", 3, AddrMode::Absolute, 5);
     setOp(ops, 0xC6, "MOV", 1, AddrMode::SpcIndirectX, 4);
@@ -511,7 +511,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0xD0, "BNE", 2, AddrMode::Relative8, 2);
     setOp(ops, 0xD1, "TCALL13", 1, AddrMode::Implied, 8);
     setOp(ops, 0xD2, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0xD3, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0xD3, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0xD4, "MOV", 2, AddrMode::DirectPageX, 5);
     setOp(ops, 0xD5, "MOV", 3, AddrMode::AbsoluteX, 6);
     setOp(ops, 0xD6, "MOV", 3, AddrMode::AbsoluteY, 6);
@@ -527,7 +527,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0xE0, "CLRV", 1, AddrMode::Implied, 2);
     setOp(ops, 0xE1, "TCALL14", 1, AddrMode::Implied, 8);
     setOp(ops, 0xE2, "SET1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0xE3, "BBC", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0xE3, "BBS", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0xE4, "MOV", 2, AddrMode::DirectPage, 3);
     setOp(ops, 0xE5, "MOV", 3, AddrMode::Absolute, 4);
     setOp(ops, 0xE6, "MOV", 1, AddrMode::SpcIndirectX, 3);
@@ -543,7 +543,7 @@ std::array<CpuOpcode, 256> buildApuOpcodeTable() {
     setOp(ops, 0xF0, "BEQ", 2, AddrMode::Relative8, 2);
     setOp(ops, 0xF1, "TCALL15", 1, AddrMode::Implied, 8);
     setOp(ops, 0xF2, "CLR1", 2, AddrMode::DirectPage, 4);
-    setOp(ops, 0xF3, "BBS", 3, AddrMode::SpcDpRel8, 5);
+    setOp(ops, 0xF3, "BBC", 3, AddrMode::SpcDpRel8, 5);
     setOp(ops, 0xF4, "MOV", 2, AddrMode::DirectPageX, 4);
     setOp(ops, 0xF5, "MOV", 3, AddrMode::AbsoluteX, 5);
     setOp(ops, 0xF6, "MOV", 3, AddrMode::AbsoluteY, 5);

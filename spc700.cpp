@@ -703,19 +703,16 @@ uint32_t Spc700::step(APU& apu) {
             stackPush(apu, m_y);
             return 4;
 
-        case 0xAE: // POP A
+        case 0xAE: // POP A — unlike 6502's PLA, SPC700's POP does not touch flags.
             m_a = stackPop(apu);
-            setNZFromByte(m_a);
             return 4;
 
-        case 0xCE: // POP X
+        case 0xCE: // POP X — flags unaffected.
             m_x = stackPop(apu);
-            setNZFromByte(m_x);
             return 4;
 
-        case 0xEE: // POP Y
+        case 0xEE: // POP Y — flags unaffected.
             m_y = stackPop(apu);
-            setNZFromByte(m_y);
             return 4;
 
         case 0x8E: // POP PSW
@@ -2059,13 +2056,14 @@ uint32_t Spc700::step(APU& apu) {
         case 0xEF: // SLEEP — waits for DSP interrupt on hardware; DSP not emulated ⇒ keep advancing.
             return 8;
 
-        case 0xFE: { // DBNZ Y,rel — decrement Y then branch back if nonzero.
+        case 0xFE: { // DBNZ Y,rel — decrement Y then branch back if nonzero (flags unaffected).
             --m_y;
-            setNZFromByte(m_y);
-            int8_t rel = static_cast<int8_t>(fetchPc(apu));
-            if (!flagZ())
+            const int8_t rel = static_cast<int8_t>(fetchPc(apu));
+            if (m_y != 0) {
                 m_pc = spcPcPlusRel(m_pc, rel);
-            return flagZ() ? 2 : 4;
+                return 4;
+            }
+            return 2;
         }
 
         case 0xFF: // STOP — normally driver exit; halt so we avoid burning host CPU.

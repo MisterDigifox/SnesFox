@@ -475,6 +475,13 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
     CPU cpu;
     cpu.reset(bus, resetVector);
 
+    uint64_t audioTotal = 0;
+    uint64_t audioClipped = 0;
+    int16_t audioPeak = 0;
+    double audioSumSq = 0.0;
+    std::array<Sdsp::PcmFrame, 4096> audioBuf{};
+
+    int lastPos = -1;
     for (uint64_t f = 0; f < frames; ++f) {
         const uint64_t frameStartCycles = cpu.cycles();
 
@@ -482,6 +489,45 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
             cpu.step(bus);
             advanceCpuScheduling(bus, cpu, false);
         }
+
+        if (std::getenv("SNESFOX_DSP_LOG")) {
+            const int pos = bus.apu().readPort(0x2143);
+            if (pos != lastPos) {
+                std::cerr << "[POS] frame=" << f << " position=" << pos << "\n";
+                lastPos = pos;
+            }
+            if (pos >= 3 && pos <= 6) {
+                const auto& regs = bus.apu().dsp().registers();
+                for (int v : {3, 4}) {
+                    const int base = v * 0x10;
+                    std::cerr << "[V" << v << "@pos" << pos << "] f=" << f
+                              << " voll=" << static_cast<int>(static_cast<int8_t>(regs[base + 0]))
+                              << " volr=" << static_cast<int>(static_cast<int8_t>(regs[base + 1]))
+                              << " adsr1=" << std::hex << static_cast<int>(regs[base + 5])
+                              << " gain=" << static_cast<int>(regs[base + 7])
+                              << " envx=" << static_cast<int>(regs[base + 8]) << std::dec << "\n";
+                }
+            }
+        }
+
+        size_t n;
+        while ((n = bus.apu().popAudioSamples(audioBuf.data(), audioBuf.size())) > 0) {
+            for (size_t i = 0; i < n; ++i) {
+                for (int16_t s : {audioBuf[i].left, audioBuf[i].right}) {
+                    ++audioTotal;
+                    if (s == 32767 || s == -32768) ++audioClipped;
+                    if (std::abs(static_cast<int>(s)) > std::abs(static_cast<int>(audioPeak))) audioPeak = s;
+                    audioSumSq += static_cast<double>(s) * static_cast<double>(s);
+                }
+            }
+        }
+    }
+    if (audioTotal > 0) {
+        std::cerr << "--- Audio stats over " << std::dec << frames << " frame(s)\n"
+                  << "  samples=" << audioTotal << " clipped(=+-32767/32768)=" << audioClipped
+                  << " (" << (100.0 * static_cast<double>(audioClipped) / static_cast<double>(audioTotal)) << "%)"
+                  << " peak=" << audioPeak
+                  << " rms=" << std::sqrt(audioSumSq / static_cast<double>(audioTotal)) << "\n";
     }
 
     const Ppu& p = bus.ppu();

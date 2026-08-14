@@ -22,6 +22,7 @@ public:
 
     [[nodiscard]] size_t availableAudioSamples() const { return m_sdsp.availableSamples(); }
     size_t popAudioSamples(Sdsp::PcmFrame* out, size_t maxFrames);
+    [[nodiscard]] const Sdsp& dsp() const { return m_sdsp; }
 
     uint8_t spcPeek(uint16_t addr);
     void    spcPoke(uint16_t addr, uint8_t value);
