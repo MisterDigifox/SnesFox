@@ -1,5 +1,6 @@
 #include "display.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 #include "imgui.h"
 #include "backends/imgui_impl_sdl2.h"
@@ -271,9 +272,17 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             ImGui::SameLine();
             for (int col = 0; col < PALETTE_COLS; ++col) {
                 ImGui::PushID(col);
-                ImGui::ColorButton("##swatch", bgr555ToImVec4(panel.palette[row * PALETTE_COLS + col]),
-                                   ImGuiColorEditFlags_AlphaOpaque,
-                                   ImVec2(PALETTE_SWATCH_SIZE, PALETTE_SWATCH_SIZE));
+                const uint16_t raw = panel.palette[row * PALETTE_COLS + col];
+                if (ImGui::ColorButton("##swatch", bgr555ToImVec4(raw),
+                                       ImGuiColorEditFlags_AlphaOpaque,
+                                       ImVec2(PALETTE_SWATCH_SIZE, PALETTE_SWATCH_SIZE))) {
+                    const int r8 = (raw & 0x1F) * 255 / 31;
+                    const int g8 = ((raw >> 5) & 0x1F) * 255 / 31;
+                    const int b8 = ((raw >> 10) & 0x1F) * 255 / 31;
+                    char clipboardText[16];
+                    std::snprintf(clipboardText, sizeof(clipboardText), "%d, %d, %d", r8, g8, b8);
+                    ImGui::SetClipboardText(clipboardText);
+                }
                 ImGui::PopID();
                 if (col != PALETTE_COLS - 1) ImGui::SameLine();
             }
