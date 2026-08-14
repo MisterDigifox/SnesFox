@@ -22,12 +22,20 @@ struct DebugSection {
     std::vector<std::string> lines;
 };
 
+// Full VRAM (0x8000 words) as 8x8 4bpp tiles = 2048 tiles, shown as a 16-wide sheet (128 rows).
+constexpr int kTileSheetCols = 16;
+constexpr int kTileSheetRows = 128;
+constexpr int kTileSheetW = kTileSheetCols * 8; // 128
+constexpr int kTileSheetH = kTileSheetRows * 8; // 1024
+
 // SNES CGRAM: 16 palettes × 16 colors each (256 entries total).
 struct DebugPanel {
     std::vector<DebugSection> sections; // ROM, CPU Debug, PPU State — rendered in the left-side menu
     bool showPalette = false;
     std::array<uint16_t, 256> palette{}; // raw SNES BGR555 entries, valid only if showPalette
     std::vector<std::string> instructionLog;
+    bool showTiles = false;
+    std::array<uint32_t, kTileSheetW * kTileSheetH> tileSheetArgb{}; // row-major, resolved via palette 0
 };
 
 // Result of clicking a palette swatch and hitting Apply in the editor popup.
@@ -56,12 +64,13 @@ public:
 private:
     void drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog);
     void drawRightPanel(const DebugPanel& panel);
-    void drawBottomPanel();
+    void drawBottomPanel(const DebugPanel& panel);
 
-    SDL_Window*   m_window      = nullptr;
-    SDL_Renderer* m_renderer    = nullptr;
-    SDL_Texture*  m_frameTex    = nullptr; // 256×224 streaming texture
-    int           m_windowWidth = 0;
+    SDL_Window*   m_window       = nullptr;
+    SDL_Renderer* m_renderer     = nullptr;
+    SDL_Texture*  m_frameTex     = nullptr; // 256×224 streaming texture
+    SDL_Texture*  m_tileSheetTex = nullptr; // 128×1024 streaming texture for the Tiles Viewer (full VRAM)
+    int           m_windowWidth  = 0;
     int           m_windowHeight = 0;
 
     int m_editingPaletteIndex = -1; // -1 when the palette editor popup is closed

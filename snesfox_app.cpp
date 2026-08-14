@@ -249,6 +249,41 @@ std::string hex24(uint32_t value) {
     return oss.str();
 }
 
+uint32_t bgr555ToArgb(uint16_t c) {
+    const uint32_t r = static_cast<uint32_t>((c & 0x1F) * 255 / 31);
+    const uint32_t g = static_cast<uint32_t>(((c >> 5) & 0x1F) * 255 / 31);
+    const uint32_t b = static_cast<uint32_t>(((c >> 10) & 0x1F) * 255 / 31);
+    return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+
+// Decodes the entire VRAM (0x8000 words = 2048 8x8 4bpp tiles) into a 128-wide ARGB8888 sheet
+// (16 tiles per row, 128 rows), resolved through palette 0.
+// A 4bpp tile is 32 bytes / 16 words: 8 words of planes 0/1, then 8 words of planes 2/3.
+void decodeTileSheet(const uint16_t* vram, const uint16_t* cgram,
+                     std::array<uint32_t, kTileSheetW * kTileSheetH>& outArgb) {
+    for (int tileIndex = 0; tileIndex < kTileSheetCols * kTileSheetRows; ++tileIndex) {
+        const int tileCol = tileIndex % kTileSheetCols;
+        const int tileRow = tileIndex / kTileSheetCols;
+        const uint16_t tileWordBase = static_cast<uint16_t>(tileIndex * 16);
+        for (int py = 0; py < 8; ++py) {
+            const uint16_t w01 = vram[(tileWordBase + py) & 0x7FFF];
+            const uint16_t w23 = vram[(tileWordBase + 8 + py) & 0x7FFF];
+            const uint8_t p0 = static_cast<uint8_t>(w01 & 0xFF);
+            const uint8_t p1 = static_cast<uint8_t>((w01 >> 8) & 0xFF);
+            const uint8_t p2 = static_cast<uint8_t>(w23 & 0xFF);
+            const uint8_t p3 = static_cast<uint8_t>((w23 >> 8) & 0xFF);
+            for (int px = 0; px < 8; ++px) {
+                const int bit = 7 - px;
+                const int colorIndex = ((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1)
+                                      | (((p2 >> bit) & 1) << 2) | (((p3 >> bit) & 1) << 3);
+                const int outX = tileCol * 8 + px;
+                const int outY = tileRow * 8 + py;
+                outArgb[static_cast<size_t>(outY * kTileSheetW + outX)] = bgr555ToArgb(cgram[colorIndex]);
+            }
+        }
+    }
+}
+
 uint16_t readResetVector(const std::vector<uint8_t>& rom, bool isLoRom) {
     const size_t addr = isLoRom ? 0x7FFC : 0xFFFC;
     if (rom.size() <= addr + 1) return 0x0000;
@@ -353,6 +388,9 @@ DebugPanel makeDebugPanel(
         }
     }
     panel.sections.push_back(std::move(ppuSection));
+
+    panel.showTiles = true;
+    decodeTileSheet(ppu.vram(), ppu.cgram(), panel.tileSheetArgb);
 
     panel.instructionLog.assign(instructionLog.begin(), instructionLog.end());
     return panel;

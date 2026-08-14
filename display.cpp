@@ -12,7 +12,7 @@ constexpr int scale23(int v) { return (v * 2 + 1) / 3; }
 
 // Baseline window height keeps scaled SNES framebuffer centred with proportional inset (~32 px).
 constexpr int WINDOW_HEIGHT = scale23(768); // height of the top area (left/right menus + game frame)
-constexpr int BOTTOM_PANEL_HEIGHT = scale23(220);
+constexpr int BOTTOM_PANEL_HEIGHT = scale23(440);
 constexpr int LEFT_PANEL_WIDTH = scale23(440);
 constexpr int PANEL_WIDTH   = scale23(700);
 
@@ -153,7 +153,8 @@ Display::~Display() {
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
-    if (m_frameTex)  SDL_DestroyTexture(m_frameTex);
+    if (m_frameTex)      SDL_DestroyTexture(m_frameTex);
+    if (m_tileSheetTex)  SDL_DestroyTexture(m_tileSheetTex);
     if (m_renderer)  SDL_DestroyRenderer(m_renderer);
     if (m_window)    SDL_DestroyWindow(m_window);
     SDL_Quit();
@@ -338,11 +339,46 @@ constexpr ImGuiWindowFlags kBottomPanelFlags = ImGuiWindowFlags_NoResize | ImGui
     | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
 }
 
-void Display::drawBottomPanel() {
+void Display::drawBottomPanel(const DebugPanel& panel) {
     ImGui::SetNextWindowPos(ImVec2(0.0f, static_cast<float>(WINDOW_HEIGHT)));
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(m_windowWidth), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
     ImGui::Begin("Tiles Viewer", nullptr, kBottomPanelFlags);
-    ImGui::TextDisabled("(coming soon)");
+    ImGui::BeginChild("TilesScrollRegion", ImGui::GetContentRegionAvail(), false);
+
+    if (panel.showTiles) {
+        if (!m_tileSheetTex) {
+            m_tileSheetTex = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
+                                               SDL_TEXTUREACCESS_STREAMING, kTileSheetW, kTileSheetH);
+            if (m_tileSheetTex) {
+                SDL_SetTextureBlendMode(m_tileSheetTex, SDL_BLENDMODE_NONE);
+                SDL_SetTextureScaleMode(m_tileSheetTex, SDL_ScaleModeNearest); // keep tile edges crisp when upscaled
+            }
+        }
+        if (m_tileSheetTex) {
+            SDL_UpdateTexture(m_tileSheetTex, nullptr, panel.tileSheetArgb.data(),
+                              kTileSheetW * static_cast<int>(sizeof(uint32_t)));
+            constexpr float kScale = 2.0f;
+            ImGui::Image(m_tileSheetTex, ImVec2(kTileSheetW * kScale, kTileSheetH * kScale));
+
+            // Grid overlay separating each 8x8 tile, drawn on top so it never alters the decoded pixels.
+            const ImVec2 imgMin = ImGui::GetItemRectMin();
+            const ImVec2 imgMax = ImGui::GetItemRectMax();
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            constexpr ImU32 kGridColor = IM_COL32(180, 180, 190, 130);
+            for (int col = 0; col <= kTileSheetCols; ++col) {
+                const float x = imgMin.x + static_cast<float>(col * 8) * kScale;
+                drawList->AddLine(ImVec2(x, imgMin.y), ImVec2(x, imgMax.y), kGridColor);
+            }
+            for (int row = 0; row <= kTileSheetRows; ++row) {
+                const float y = imgMin.y + static_cast<float>(row * 8) * kScale;
+                drawList->AddLine(ImVec2(imgMin.x, y), ImVec2(imgMax.x, y), kGridColor);
+            }
+        }
+    } else {
+        ImGui::TextDisabled("(coming soon)");
+    }
+
+    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -370,7 +406,7 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
 
     drawLeftPanel(panel.sections, panel.instructionLog);
     drawRightPanel(panel);
-    drawBottomPanel();
+    drawBottomPanel(panel);
 
     ImGui::Render();
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), m_renderer);
