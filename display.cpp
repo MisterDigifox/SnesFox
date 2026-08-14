@@ -1,8 +1,7 @@
 #include "display.hpp"
+#include "native_file_dialog.hpp"
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
-#include <filesystem>
 #include <stdexcept>
 #include "imgui.h"
 #include "backends/imgui_impl_sdl2.h"
@@ -219,24 +218,6 @@ void drawSectionTable(const DebugSection& section) {
 }
 }
 
-namespace {
-// Lists .sfc/.smc files in the current working directory, sorted, for the Load popup.
-std::vector<std::string> findRomFilesInCwd() {
-    std::vector<std::string> names;
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(".", ec)) {
-        if (ec || !entry.is_regular_file()) continue;
-        std::string ext = entry.path().extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (ext == ".sfc" || ext == ".smc") {
-            names.push_back(entry.path().filename().string());
-        }
-    }
-    std::sort(names.begin(), names.end());
-    return names;
-}
-}
-
 DebugAction Display::drawControls(bool paused) {
     DebugAction action = DebugAction::None;
     m_pendingRomLoadPath.clear();
@@ -246,22 +227,14 @@ DebugAction Display::drawControls(bool paused) {
     ImGui::Begin("Left", nullptr, kPanelWindowFlags);
 
     if (ImGui::Button("Load")) {
-        ImGui::OpenPopup("LoadRomPopup");
-    }
-    if (ImGui::BeginPopup("LoadRomPopup")) {
-        const std::vector<std::string> romFiles = findRomFilesInCwd();
-        if (romFiles.empty()) {
-            ImGui::TextDisabled("No .sfc/.smc files found here");
-        } else {
-            for (const auto& name : romFiles) {
-                if (ImGui::Selectable(name.c_str())) {
-                    m_pendingRomLoadPath = name;
-                    action = DebugAction::LoadRom;
-                    ImGui::CloseCurrentPopup();
-                }
-            }
+        // Blocking native call (NSOpenPanel on macOS) — the SDL/ImGui loop simply
+        // pauses on this frame until the user picks a file or cancels, same as any
+        // other native modal file dialog.
+        const std::optional<std::string> path = showOpenRomDialog();
+        if (path) {
+            m_pendingRomLoadPath = *path;
+            action = DebugAction::LoadRom;
         }
-        ImGui::EndPopup();
     }
     ImGui::SameLine();
 
