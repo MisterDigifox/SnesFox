@@ -373,6 +373,15 @@ void Display::drawBottomPanel(const DebugPanel& panel) {
                 const float y = imgMin.y + static_cast<float>(row * 8) * kScale;
                 drawList->AddLine(ImVec2(imgMin.x, y), ImVec2(imgMax.x, y), kGridColor);
             }
+
+            if (ImGui::IsItemHovered()) {
+                const ImVec2 mousePos = ImGui::GetMousePos();
+                const int col = std::clamp(static_cast<int>((mousePos.x - imgMin.x) / (8.0f * kScale)), 0, kTileSheetCols - 1);
+                const int row = std::clamp(static_cast<int>((mousePos.y - imgMin.y) / (8.0f * kScale)), 0, kTileSheetRows - 1);
+                const int tileIndex = row * kTileSheetCols + col;
+                const int wordAddr = tileIndex * 16;
+                ImGui::SetTooltip("Tile #%d\nVRAM $%04X (word)  $%04X (byte)", tileIndex, wordAddr, wordAddr * 2);
+            }
         }
     } else {
         ImGui::TextDisabled("(coming soon)");
