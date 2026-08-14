@@ -364,6 +364,8 @@ void Display::drawBottomPanel(const DebugPanel& panel) {
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
     ImGui::Begin("Tiles Viewer", nullptr, kBottomPanelFlags);
 
+    ImGui::SeparatorText("Layers");
+
     // Layer visibility toggles: click to hide/show that layer in the emulated game view.
     // Highlighted red while hidden. This only affects the debug display (Ppu's
     // m_debugLayerDisable override) — it never touches the actual TM/TS register values,
