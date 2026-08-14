@@ -423,14 +423,38 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
     drawRightPanel(panel);
     drawBottomPanel(panel);
 
+    // Divider lines: drawn via a plain (non-popup) ImGui window's own draw list rather
+    // than a raw SDL_RenderDrawLine after ImGui::Render(). A raw SDL draw paints over
+    // literally everything ImGui just queued, including any open popup (e.g. the palette
+    // color editor); a regular window's draw list still composites on top of the other
+    // panels' backgrounds, but ImGui always renders open popups in front of regular
+    // windows, so this keeps the dividers visible above panels yet below any popup.
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(m_windowWidth), static_cast<float>(m_windowHeight)));
+    ImGui::Begin("##Dividers", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings
+        | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
+    // Regular (non-popup) windows keep whatever z-order they last had — just Begin()-ing
+    // this one last in the frame doesn't guarantee it renders above the panels (e.g.
+    // scrolling the Tiles Viewer bumps it in front of this overlay). Force front every
+    // frame so the dividers stay visible over the panels' own backgrounds; skip it while
+    // the palette popup is open so this never steals keyboard focus from its input fields
+    // (popups render above this overlay regardless, since ImGui always fronts those).
+    if (!ImGui::IsPopupOpen("EditPaletteColor")) {
+        ImGui::SetWindowFocus();
+    }
+    ImDrawList* dividerDrawList = ImGui::GetWindowDrawList();
+    const ImU32 dividerColor = IM_COL32(DIVIDER_COLOR.r, DIVIDER_COLOR.g, DIVIDER_COLOR.b, DIVIDER_COLOR.a);
+    dividerDrawList->AddLine(ImVec2(0.0f, static_cast<float>(WINDOW_HEIGHT)),
+        ImVec2(static_cast<float>(m_windowWidth), static_cast<float>(WINDOW_HEIGHT)), dividerColor);
+    dividerDrawList->AddLine(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), 0.0f),
+        ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(m_windowHeight)), dividerColor);
+    dividerDrawList->AddLine(ImVec2(static_cast<float>(TEXT_PANEL_X), 0.0f),
+        ImVec2(static_cast<float>(TEXT_PANEL_X), static_cast<float>(WINDOW_HEIGHT)), dividerColor);
+    ImGui::End();
+
     ImGui::Render();
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), m_renderer);
-
-    // Drawn on top of the ImGui panels so they stay visible above each panel's own background.
-    SDL_SetRenderDrawColor(m_renderer, DIVIDER_COLOR.r, DIVIDER_COLOR.g, DIVIDER_COLOR.b, DIVIDER_COLOR.a);
-    SDL_RenderDrawLine(m_renderer, 0, WINDOW_HEIGHT, m_windowWidth, WINDOW_HEIGHT);
-    SDL_RenderDrawLine(m_renderer, LEFT_PANEL_WIDTH, 0, LEFT_PANEL_WIDTH, m_windowHeight);
-    SDL_RenderDrawLine(m_renderer, TEXT_PANEL_X, 0, TEXT_PANEL_X, WINDOW_HEIGHT);
 
     SDL_RenderPresent(m_renderer);
     return m_pendingPaletteEdit;
