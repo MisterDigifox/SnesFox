@@ -343,8 +343,11 @@ constexpr ImGuiWindowFlags kBottomPanelFlags = ImGuiWindowFlags_NoResize | ImGui
 }
 
 void Display::drawBottomPanel(const DebugPanel& panel) {
+    // Same width as the Left panel above it, so the child's own scrollbar (which ImGui
+    // always draws at the child's right edge) lands right next to the vertical separator
+    // instead of at the far right of the whole application window.
     ImGui::SetNextWindowPos(ImVec2(0.0f, static_cast<float>(WINDOW_HEIGHT)));
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(m_windowWidth), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(LEFT_PANEL_WIDTH), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
     ImGui::Begin("Tiles Viewer", nullptr, kBottomPanelFlags);
     ImGui::BeginChild("TilesScrollRegion", ImGui::GetContentRegionAvail(), false);
 
@@ -426,7 +429,7 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
     // Drawn on top of the ImGui panels so they stay visible above each panel's own background.
     SDL_SetRenderDrawColor(m_renderer, DIVIDER_COLOR.r, DIVIDER_COLOR.g, DIVIDER_COLOR.b, DIVIDER_COLOR.a);
     SDL_RenderDrawLine(m_renderer, 0, WINDOW_HEIGHT, m_windowWidth, WINDOW_HEIGHT);
-    SDL_RenderDrawLine(m_renderer, LEFT_PANEL_WIDTH, 0, LEFT_PANEL_WIDTH, WINDOW_HEIGHT);
+    SDL_RenderDrawLine(m_renderer, LEFT_PANEL_WIDTH, 0, LEFT_PANEL_WIDTH, m_windowHeight);
     SDL_RenderDrawLine(m_renderer, TEXT_PANEL_X, 0, TEXT_PANEL_X, WINDOW_HEIGHT);
 
     SDL_RenderPresent(m_renderer);
