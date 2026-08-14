@@ -481,33 +481,12 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
     double audioSumSq = 0.0;
     std::array<Sdsp::PcmFrame, 4096> audioBuf{};
 
-    int lastPos = -1;
     for (uint64_t f = 0; f < frames; ++f) {
         const uint64_t frameStartCycles = cpu.cycles();
 
         while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
             cpu.step(bus);
             advanceCpuScheduling(bus, cpu, false);
-        }
-
-        if (std::getenv("SNESFOX_DSP_LOG")) {
-            const int pos = bus.apu().readPort(0x2143);
-            if (pos != lastPos) {
-                std::cerr << "[POS] frame=" << f << " position=" << pos << "\n";
-                lastPos = pos;
-            }
-            if (pos >= 3 && pos <= 6) {
-                const auto& regs = bus.apu().dsp().registers();
-                for (int v : {3, 4}) {
-                    const int base = v * 0x10;
-                    std::cerr << "[V" << v << "@pos" << pos << "] f=" << f
-                              << " voll=" << static_cast<int>(static_cast<int8_t>(regs[base + 0]))
-                              << " volr=" << static_cast<int>(static_cast<int8_t>(regs[base + 1]))
-                              << " adsr1=" << std::hex << static_cast<int>(regs[base + 5])
-                              << " gain=" << static_cast<int>(regs[base + 7])
-                              << " envx=" << static_cast<int>(regs[base + 8]) << std::dec << "\n";
-                }
-            }
         }
 
         size_t n;

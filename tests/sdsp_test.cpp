@@ -119,6 +119,30 @@ void testKeyOffFadesOutGradually() {
 }
 
 // -----------------------------------------------------------------------
+// Regression test: GAIN ramp mode bits (6:5) must map to shapes as verified
+// against hardware (ares DSP::envelopeRun): 00=decrease linear, 01=decrease
+// exponential, 10=increase linear, 11=increase (bent line) — this mapping
+// was previously inverted (00 was read as increase, etc.), making notes
+// using a "decrease" GAIN ramp climb to full volume instead of fading.
+// -----------------------------------------------------------------------
+void testGainRampModeDirection() {
+    auto aram = makeAram();
+    Sdsp dsp;
+    dsp.reset();
+    // GAIN 0x9C = 1001_1100: bit7=1 (ramp), bits6:5="00" -> decrease linear, rate=0x1C=28.
+    setVoice0(dsp, 127, 127, 0x00, 0x00, 0x7F); // direct max first, so there's something to decrease from
+    dsp.writeReg(0x4C, 0x01); // KON voice 0
+    skipKeyonDelay(dsp, aram);
+    dsp.runClocks(32, aram); // let the direct-mode GAIN snap to its target
+    const int envxStart = envx0(dsp);
+    dsp.writeReg(0x07, 0x9C); // switch to the ramp-down GAIN command
+
+    dsp.runClocks(32 * 4, aram); // rate 28 -> period 4 samples/step: exactly one step
+    expectTrue(envx0(dsp) < envxStart,
+        "GAIN 0x9C (mode bits 00): ENVX decreases, not increases");
+}
+
+// -----------------------------------------------------------------------
 // Regression test: BRR resampling must interpolate between adjacent decoded
 // samples using the pitch counter's fractional part, not just nearest-
 // neighbor — otherwise off-unity pitches alias/distort.
@@ -193,6 +217,7 @@ void testBrrFilterOverflowWrapsLikeHardware() {
 int runSdspSelfTests() {
     testAdsrAttackRampsGradually();
     testKeyOffFadesOutGradually();
+    testGainRampModeDirection();
     testPitchInterpolatesBetweenSamples();
     testBrrFilterOverflowWrapsLikeHardware();
 

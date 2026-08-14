@@ -182,12 +182,14 @@ void Sdsp::updateEnvelope(size_t voiceIndex) {
         }
     } else {
         // GAIN ramp mode: bits6-5 select the shape, bits4-0 select the rate.
+        // Verified against hardware (ares DSP::envelopeRun): 00=decrease linear,
+        // 01=decrease exponential, 10=increase linear, 11=increase (bent line).
         rateIndex = gain & 0x1F;
         switch ((gain >> 5) & 0x03) {
-            case 0: shape = Shape::LinearIncrease; break;
-            case 1: shape = Shape::LinearDecrease; break;
-            case 2: shape = Shape::BentLineIncrease; break;
-            default: shape = Shape::ExponentialDecrease; break;
+            case 0: shape = Shape::LinearDecrease; break;
+            case 1: shape = Shape::ExponentialDecrease; break;
+            case 2: shape = Shape::LinearIncrease; break;
+            default: shape = Shape::BentLineIncrease; break;
         }
     }
 
@@ -215,7 +217,8 @@ void Sdsp::updateEnvelope(size_t voiceIndex) {
             if (v.envLevel > 0x7FF) v.envLevel = 0x7FF;
             break;
         case Shape::ExponentialDecrease:
-            v.envLevel -= 1 + (v.envLevel >> 8);
+            --v.envLevel;
+            v.envLevel -= v.envLevel >> 8;
             if (v.envLevel < 0) v.envLevel = 0;
             if (adsrEnabled && v.envPhase == EnvPhase::Decay) {
                 const int sl = (adsr2 >> 5) & 0x07;
