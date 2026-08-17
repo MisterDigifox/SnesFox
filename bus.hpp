@@ -2,11 +2,13 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "apu.hpp"
 #include "dma.hpp"
+#include "gsu.hpp"
 #include "header.hpp"
 #include "ppu.hpp"
 
@@ -50,6 +52,13 @@ public:
     const Ppu& ppu() const { return m_ppu; }
     APU& apu() { return m_apu; }
     const APU& apu() const { return m_apu; }
+
+    // Used by BusGsuHost (bus.cpp) to bridge the GSU core to this Bus.
+    uint8_t gsuReadRom(uint32_t address24) const;
+    void raiseGsuIrq();
+
+    bool hasSuperFx() const { return m_hasSuperFx; }
+    const GSU& gsu() const { return m_gsu; }
 
 private:
     const std::vector<uint8_t>& m_rom;
@@ -113,4 +122,15 @@ private:
     uint32_t loRomToFileOffset(uint8_t bank, uint16_t addr) const;
     bool isHiRomArea(uint8_t bank, uint16_t addr) const;
     uint32_t hiRomToFileOffset(uint8_t bank, uint16_t addr) const;
+
+    // ------------------------------------------------------------
+    // Super FX / GSU coprocessor
+    // ------------------------------------------------------------
+    bool m_hasSuperFx = false;
+    mutable GSU m_gsu;
+    // Banks $70 (0x0000-0xFFFF) + $71 (0x0000-0xFFFF), the GSU's own work RAM —
+    // addressed by both the main CPU and the GSU core through this same Bus.
+    std::vector<uint8_t> m_gsuRam;
+    std::unique_ptr<GsuHost> m_gsuHost;
+    bool m_gsuIrqPending = false;
 };

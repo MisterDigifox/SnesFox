@@ -3,9 +3,37 @@
 #include <cstdio>
 #include <fstream>
 
+// Bridges the ares-derived GSU core to this Bus: GSU RAM ($70/$71) round-trips through
+// Bus::read/write (same storage the main CPU sees at those banks), ROM reads go through
+// the GSU's own flat 24-bit address space (bank*0x10000+addr, unlike the CPU's windowed
+// LoROM view), and STOP/timeout IRQs feed the same takePendingIrq() the H/V timer uses.
+class BusGsuHost final : public GsuHost {
+public:
+    explicit BusGsuHost(Bus& bus) : m_bus(bus) {}
+
+    uint8_t read(uint8_t bank, uint16_t addr) override { return m_bus.read(bank, addr); }
+    void write(uint8_t bank, uint16_t addr, uint8_t value) override { m_bus.write(bank, addr, value); }
+    uint8_t readRom(uint32_t address24) override { return m_bus.gsuReadRom(address24); }
+    void onGsuIrq() override { m_bus.raiseGsuIrq(); }
+
+private:
+    Bus& m_bus;
+};
+
 Bus::Bus(const std::vector<uint8_t>& rom, const std::string& savePath)
     : m_rom(rom), m_savePath(savePath) {
     m_mapMode = HeaderParser::detect(m_rom);
+
+    const size_t chipOffset = (m_mapMode == RomMapping::HiROM) ? 0xFFD6 : 0x7FD6;
+    if (chipOffset < m_rom.size()) {
+        const auto romType = static_cast<RomTypeField>(m_rom[chipOffset]);
+        m_hasSuperFx = romType == RomTypeField::SUPERFX || romType == RomTypeField::SUPERFX2
+            || romType == RomTypeField::SUPERFX3 || romType == RomTypeField::SUPERFX4;
+    }
+    if (m_hasSuperFx) {
+        m_gsuRam.assign(0x20000, 0x00);
+        m_gsuHost = std::make_unique<BusGsuHost>(*this);
+    }
 
     const size_t sramOffset = (m_mapMode == RomMapping::HiROM) ? 0xFFD8 : 0x7FD8;
     if (sramOffset < m_rom.size()) {
@@ -43,12 +71,25 @@ void Bus::reset() {
     m_apu.reset();
     m_ppu.reset();
     m_dma.reset();
+    m_gsu.reset();
+    m_gsuIrqPending = false;
     m_reg420c = 0;
     m_vblankWaiPending = false;
     m_vCounter   = 261;
     m_hCounter   = 0;
     m_cycleAccum = 0;
     m_lastCycles = 0;
+}
+
+uint8_t Bus::gsuReadRom(uint32_t address24) const {
+    if (m_rom.empty()) return 0xFF;
+    // The GSU sees the cart ROM as one flat linear array (bank*0x10000+addr), bypassing
+    // the CPU's $8000-windowed LoROM view — this matches how the physical chip is wired.
+    return m_rom[address24 % m_rom.size()];
+}
+
+void Bus::raiseGsuIrq() {
+    m_gsuIrqPending = true;
 }
 
 static constexpr uint16_t H_TOTAL   = 340;
@@ -60,6 +101,10 @@ bool Bus::stepPeripherals(uint64_t totalCycles) {
     m_lastCycles = totalCycles;
 
     const uint16_t prevHIn = m_hCounter;
+
+    if (m_hasSuperFx) {
+        m_gsu.run(delta, *m_gsuHost);
+    }
 
     m_cycleAccum += delta;
 
@@ -142,8 +187,11 @@ void Bus::setJoy1(uint16_t state) { m_joy1 = state; }
 void Bus::setJoy2(uint16_t state) { m_joy2 = state; }
 
 bool Bus::takePendingIrq() {
-    const bool pending = m_irqPending;
+    // GSU IRQ (STOP / timeout) is a separate cartridge IRQ line, not gated by NMITIMEN's
+    // H/V-timer IRQ enable bits — merge it in here so CPU::step sees one pending-IRQ signal.
+    const bool pending = m_irqPending || m_gsuIrqPending;
     m_irqPending = false;
+    m_gsuIrqPending = false;
     return pending;
 }
 
@@ -208,6 +256,18 @@ uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
     // ------------------------------------------------------------
     if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) && addr <= 0x1FFF) {
         return m_wram[addr];
+    }
+
+    // ------------------------------------------------------------
+    // Super FX / GSU
+    // ------------------------------------------------------------
+    if (m_hasSuperFx) {
+        if (bank == 0x70 || bank == 0x71) {
+            return m_gsuRam[(static_cast<size_t>(bank - 0x70) << 16) | addr];
+        }
+        if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) && addr >= 0x3000 && addr <= 0x34FF) {
+            return m_gsu.readRegister(addr);
+        }
     }
 
     // ------------------------------------------------------------
@@ -351,6 +411,20 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) && addr <= 0x1FFF) {
         m_wram[addr] = value;
         return;
+    }
+
+    // ------------------------------------------------------------
+    // Super FX / GSU
+    // ------------------------------------------------------------
+    if (m_hasSuperFx) {
+        if (bank == 0x70 || bank == 0x71) {
+            m_gsuRam[(static_cast<size_t>(bank - 0x70) << 16) | addr] = value;
+            return;
+        }
+        if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) && addr >= 0x3000 && addr <= 0x34FF) {
+            m_gsu.writeRegister(*m_gsuHost, addr, value);
+            return;
+        }
     }
 
     // ------------------------------------------------------------

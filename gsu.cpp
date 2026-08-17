@@ -148,7 +148,16 @@ void GSU::mainStep(GsuHost& host) {
     }
 
     const uint16_t r14Before = m_r[14];
+    const uint16_t pcBefore = m_r[15];
+    const uint8_t pbrBefore = m_pbr;
     const uint8_t opcode = peekpipe(host);
+
+    static int traceLeft = std::getenv("SNESFOX_GSU_TRACE") ? std::atoi(std::getenv("SNESFOX_GSU_TRACE")) : 0;
+    if (traceLeft > 0) {
+        --traceLeft;
+        std::fprintf(stderr, "[GSU %02X:%04X] op=%02X r1=%04X r2=%04X r14=%04X sfr=%04X\n",
+                     pbrBefore, pcBefore, opcode, m_r[1], m_r[2], m_r[14], sfrRead());
+    }
 
     instruction(opcode, host);
 
@@ -1138,7 +1147,7 @@ uint8_t GSU::readRegister(uint16_t addr) {
 }
 
 void GSU::writeRegister(GsuHost& host, uint16_t addr, uint8_t value) {
-    if (gsuIoTraceEnabled() && addr >= 0x301E && addr <= 0x303B) {
+    if (gsuIoTraceEnabled() && addr >= 0x3000 && addr <= 0x303B) {
         std::fprintf(stderr,
                      "[GSU wr $%04X]=$%02X launch#%u GO=%d ROMBR=$%02X\n",
                      addr, value, m_launchCount, m_go ? 1 : 0, m_rombr);

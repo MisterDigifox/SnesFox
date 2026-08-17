@@ -1,6 +1,8 @@
 #include "cpu.hpp"
 #include "bus.hpp"
 #include "opcodes.hpp"
+#include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -756,6 +758,16 @@ void CPU::step(Bus& bus) {
         m_instruction = op.name;
     } else {
         m_instruction = std::string(op.name) + " " + operand;
+    }
+
+    {
+        static int traceLeft = std::getenv("SNESFOX_CPU_TRACE") ? std::atoi(std::getenv("SNESFOX_CPU_TRACE")) : 0;
+        if (traceLeft > 0 && bus.hasSuperFx() && bus.gsu().running()) {
+            --traceLeft;
+            std::fprintf(stderr, "[CPU %02X:%04X] %-20s cyc=%llu p=%02X\n",
+                         fetchBank, fetchPc, m_instruction.c_str(),
+                         static_cast<unsigned long long>(m_cycles), m_p);
+        }
     }
 
     bool pcHandled = false;

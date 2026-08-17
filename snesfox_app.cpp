@@ -579,6 +579,17 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
 
     std::cerr << "  framebuffer: non-black opaque pix=" << nonBlack << " uniqColors~=" << uniq << '\n';
 
+    if (bus.hasSuperFx()) {
+        const GSU& g = bus.gsu();
+        std::cerr << "  GSU: launches=" << g.launchCount() << " stops=" << g.stopCount()
+                  << " running=" << (g.running() ? 1 : 0) << " plotCount=" << g.plotCount()
+                  << " lastSessionPlots=" << g.lastSessionPlots()
+                  << " lastSessionCycles=" << g.lastSessionCycles()
+                  << " pc=$" << hex8(g.pbr()) << ":" << hexW(g.pc())
+                  << " scbr=$" << hex8(g.scbr()) << " scmr=$" << hex8(g.scmr())
+                  << " rombr=$" << hex8(g.rombr()) << '\n';
+    }
+
     {
         std::ofstream ppm("/tmp/snap.ppm", std::ios::binary);
         ppm << "P6\n256 224\n255\n";
