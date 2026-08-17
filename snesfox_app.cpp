@@ -84,7 +84,7 @@ constexpr uint64_t DEFAULT_COV_FRAMES = 600;
 constexpr uint64_t COV_MAX_STEPS = 20000000ull;
 
 inline void advanceCpuScheduling(Bus& bus, CPU& cpu, bool updateJoyOnNmi, bool suppressJoypad = false) {
-    const bool nmi = bus.stepPeripherals(cpu.cycles());
+    const bool nmi = bus.stepPeripherals(cpu.cycles(), cpu.fineCycles());
     if (nmi) {
         if (updateJoyOnNmi) {
             bus.setJoy1(sampleJoy1(suppressJoypad));

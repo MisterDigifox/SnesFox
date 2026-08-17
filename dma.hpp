@@ -5,18 +5,25 @@ class Bus;
 
 class Dma {
 public:
-    // Call when $420B is written; bitmask selects channels 0-7
-    void trigger(uint8_t enableMask, Bus& bus);
+    // Call when $420B is written; bitmask selects channels 0-7. Returns the real-hardware
+    // master-clock cost of the transfer(s) (8 cycles/byte plus fixed per-channel overhead) —
+    // the CPU is genuinely halted for this long during GP-DMA, so the caller must fold it
+    // into CPU cycle accounting or timing-sensitive polling loops drift out of sync with
+    // real hardware (see CPU::fineCycles()'s doc comment for why that matters).
+    uint32_t trigger(uint8_t enableMask, Bus& bus);
 
     uint8_t readReg(uint8_t ch, uint8_t reg) const;
     void    writeReg(uint8_t ch, uint8_t reg, uint8_t value);
 
     void reset();
 
-    // HDMA: reload table from $43x2-4 base and prime first entry at start of frame
-    void beginHdmaFrame(uint8_t enableMask, Bus& bus);
+    // HDMA: reload table from $43x2-4 base and prime first entry at start of frame. Returns
+    // the real-hardware master-clock cost of this setup pass (see runHdmaForScanline).
+    uint32_t beginHdmaFrame(uint8_t enableMask, Bus& bus);
     // HDMA: once per scanline (current V after increment). Updates $43x2-$43x4 like hardware.
-    void runHdmaForScanline(int v, Bus& bus);
+    // Returns the real-hardware master-clock cost of this scanline's HDMA processing — the CPU
+    // is halted for this too, same reasoning as Dma::trigger's return.
+    uint32_t runHdmaForScanline(int v, Bus& bus);
 
 private:
     struct Channel {
@@ -46,10 +53,11 @@ private:
     uint16_t m_hdmaIndirectPtr[8]{};
     uint8_t  m_hdmaIndirectBank[8]{};
 
-    void runChannel(int ch, Bus& bus);
+    uint32_t runChannel(int ch, Bus& bus); // returns bytes transferred
     static void stepA(Channel& c);
     void transferOneUnit(int ch, Bus& bus);
     void transferOneUnitIndirect(int ch, Bus& bus);
-    // Returns false if HDMA for this channel ends (count byte 0, etc.)
-    bool hdmaReadLineCount(int ch, Bus& bus);
+    // Returns false if HDMA for this channel ends (count byte 0, etc.); bytesRead is
+    // incremented by the number of table bytes actually consumed (for cycle costing).
+    bool hdmaReadLineCount(int ch, Bus& bus, uint32_t& bytesRead);
 };

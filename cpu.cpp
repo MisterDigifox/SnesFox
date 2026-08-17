@@ -680,6 +680,7 @@ void CPU::reset(const Bus& bus, uint16_t resetVector) {
     m_sp = 0x01FF;
     m_d = 0x0000;
     m_cycles = 0;
+    m_fineCycles = 0;
 
     m_waiting = false;
     m_stopped = false;
@@ -698,6 +699,9 @@ void CPU::triggerNmi(Bus& bus) {
     m_pc = busRead16(bus, 0x00, 0xFFEA);
     m_bank = 0x00;
     m_cycles += 7;
+    // Push/vector-fetch all land in fixed-8-cycle regions (WRAM stack, bank-0 vector), so this
+    // is exact, not approximate — see fineCycles()'s doc comment for why staying in sync matters.
+    m_fineCycles += 7 * 8;
 }
 
 void CPU::triggerIrq(Bus& bus) {
@@ -705,6 +709,7 @@ void CPU::triggerIrq(Bus& bus) {
     if (m_waiting && flagSet(m_p, FLAG_IRQ)) {
         m_waiting = false;
         m_cycles += 7;
+        m_fineCycles += 7 * 8;
         return;
     }
     if (m_p & FLAG_IRQ) return;
@@ -717,6 +722,9 @@ void CPU::triggerIrq(Bus& bus) {
     m_pc = busRead16(bus, 0x00, 0xFFEE);
     m_bank = 0x00;
     m_cycles += 7;
+    // Push/vector-fetch all land in fixed-8-cycle regions (WRAM stack, bank-0 vector), so this
+    // is exact, not approximate — see fineCycles()'s doc comment for why staying in sync matters.
+    m_fineCycles += 7 * 8;
 }
 
 void CPU::step(Bus& bus) {
@@ -726,6 +734,7 @@ void CPU::step(Bus& bus) {
 
     if (m_waiting) {
         m_cycles += 2;
+        m_fineCycles += 2 * 8;
         return;
     }
 
@@ -746,6 +755,7 @@ void CPU::step(Bus& bus) {
         m_instruction = "DB " + hex8(m_opcode);
         m_pc = static_cast<uint16_t>(m_pc + 1);
         m_cycles += 1;
+        m_fineCycles += 1 * 8;
         return;
     }
 
@@ -762,11 +772,12 @@ void CPU::step(Bus& bus) {
 
     {
         static int traceLeft = std::getenv("SNESFOX_CPU_TRACE") ? std::atoi(std::getenv("SNESFOX_CPU_TRACE")) : 0;
-        if (traceLeft > 0 && bus.hasSuperFx() && bus.gsu().running()) {
+        static bool traceAlways = std::getenv("SNESFOX_CPU_TRACE_ALWAYS") != nullptr;
+        if (traceLeft > 0 && bus.hasSuperFx() && (traceAlways || bus.gsu().running())) {
             --traceLeft;
-            std::fprintf(stderr, "[CPU %02X:%04X] %-20s cyc=%llu p=%02X\n",
+            std::fprintf(stderr, "[CPU %02X:%04X] %-20s cyc=%llu p=%02X a=%04X x=%04X sp=%04X\n",
                          fetchBank, fetchPc, m_instruction.c_str(),
-                         static_cast<unsigned long long>(m_cycles), m_p);
+                         static_cast<unsigned long long>(m_cycles), m_p, m_a, m_x, m_sp);
         }
     }
 
@@ -3317,6 +3328,92 @@ void CPU::step(Bus& bus) {
     const uint64_t baseCycles = cpuOpcodesTable[m_opcode].cyclesNumber;
     const unsigned fetchSpeed = bus.accessSpeedCycles(fetchBank, fetchPc);
     m_cycles += (fetchSpeed == 8) ? baseCycles : (baseCycles * fetchSpeed + 4) / 8;
+
+    // fineCycles: the same total, kept at "×8" (un-rounded) resolution and, for non-indexed
+    // Absolute/DirectPage instructions, with the operand's data access priced at *its* resolved
+    // address's speed rather than assumed to match the opcode fetch's. cycles() alone can't
+    // capture this: rounding to a whole unit *per instruction* throws away exactly the
+    // fractional difference a single fixed-6-cycle I/O access makes against 8-cycle SlowROM
+    // code — small per instruction, but a fully deterministic polling loop (interrupts masked,
+    // no jitter) re-executes the same accesses every pass, so that lost fraction never
+    // accumulates into a real phase shift. Concretely: this is what let Star Frog's
+    // title-screen boot H/V-counter wait (`LDA $2137`/`LDX $213C`, both SlowROM-region code
+    // reading fixed-6-cycle PPU registers) alias onto the same ~44 H-counter values forever,
+    // always skipping the 10-dot window it was waiting for.
+    unsigned operandSpeed = fetchSpeed;
+    unsigned operandAccesses = 1;
+    bool hasResolvableOperand = true;
+    uint16_t operandAddr = 0;
+    uint8_t operandBank = 0;
+    // Effective-address formulas below mirror the actual opcode execution exactly (e.g.
+    // case 0xBD "LDA abs,X", case 0xB5 "LDA dp,X") so the address priced here always matches
+    // the address really touched.
+    switch (op.mode) {
+        case AddrMode::Absolute:
+            operandAddr = static_cast<uint16_t>(b1 | (b2 << 8));
+            operandBank = m_db;
+            break;
+        case AddrMode::AbsoluteX:
+            operandAddr = static_cast<uint16_t>((b1 | (b2 << 8)) + m_x);
+            operandBank = m_db;
+            break;
+        case AddrMode::AbsoluteY:
+            operandAddr = static_cast<uint16_t>((b1 | (b2 << 8)) + m_y);
+            operandBank = m_db;
+            break;
+        case AddrMode::DirectPage:
+            operandAddr = static_cast<uint16_t>(m_d + b1);
+            operandBank = 0x00;
+            break;
+        case AddrMode::DirectPageX:
+            operandAddr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            operandBank = 0x00;
+            break;
+        case AddrMode::DirectPageY:
+            operandAddr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_y & 0x00FF));
+            operandBank = 0x00;
+            break;
+        default:
+            hasResolvableOperand = false;
+            break;
+    }
+
+    if (hasResolvableOperand) {
+        operandSpeed = bus.accessSpeedCycles(operandBank, operandAddr);
+
+        // LDX/LDY/STX/STY/CPX/CPY size their memory access off the X flag, not M.
+        bool useIndexWidth = false;
+        switch (m_opcode) {
+            case 0xA6: case 0xAE: case 0xB6: case 0xBE: // LDX dp/abs/dp,Y/abs,Y
+            case 0xA4: case 0xAC: case 0xB4: case 0xBC: // LDY dp/abs/dp,X/abs,X
+            case 0x86: case 0x8E: case 0x96:            // STX dp/abs/dp,Y
+            case 0x84: case 0x8C: case 0x94:            // STY dp/abs/dp,X
+            case 0xE4: case 0xEC:                       // CPX dp/abs
+            case 0xC4: case 0xCC:                       // CPY dp/abs
+                useIndexWidth = true;
+                break;
+            default:
+                break;
+        }
+        const bool eightBitOperand = flagSet(m_p, useIndexWidth ? FLAG_X : FLAG_M);
+        operandAccesses = eightBitOperand ? 1 : 2;
+    }
+
+    if (operandSpeed == fetchSpeed || baseCycles <= operandAccesses) {
+        m_fineCycles += baseCycles * fetchSpeed;
+    } else {
+        const uint64_t fetchAccesses = baseCycles - operandAccesses;
+        m_fineCycles += fetchAccesses * fetchSpeed + operandAccesses * operandSpeed;
+    }
+
+    // GP-DMA ($420B) runs synchronously inside whichever bus.write() call this instruction
+    // just made (e.g. STA $420B) and genuinely halts the CPU for its duration — fold that
+    // stolen time into both counters now so it isn't silently dropped.
+    const uint32_t dmaStolen = bus.takeDmaStolenMasterClocks();
+    if (dmaStolen != 0) {
+        m_cycles += dmaStolen / 8;
+        m_fineCycles += dmaStolen;
+    }
 }
 
 void CPU::wakeFromWaiSilently() {
@@ -3324,6 +3421,7 @@ void CPU::wakeFromWaiSilently() {
     m_waiting = false;
     // Keep small; WAI burn is 2 cycles/iter when spinning — same order of magnitude as IRQ edge exit.
     m_cycles += 6;
+    m_fineCycles += 6 * 8;
 }
 
 uint16_t CPU::resetVector() const { return m_resetVector; }
@@ -3341,3 +3439,4 @@ uint16_t CPU::x() const { return m_x; }
 uint16_t CPU::y() const { return m_y; }
 uint16_t CPU::sp() const { return m_sp; }
 uint64_t CPU::cycles() const { return m_cycles; }
+uint64_t CPU::fineCycles() const { return m_fineCycles; }

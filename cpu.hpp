@@ -28,6 +28,10 @@ public:
     uint16_t y() const;
     uint16_t sp() const;
     uint64_t cycles() const;
+    // Same accounting as cycles(), but without cycles()'s single whole-instruction rounding
+    // step — kept at "eighths of a cycles() unit" resolution (see CPU::step's comment) so
+    // Bus can derive a finer H-counter without the integer-aliasing that rounding causes.
+    uint64_t fineCycles() const;
 
 private:
     bool m_waiting = false;
@@ -45,6 +49,7 @@ private:
     uint16_t m_sp = 0x01FF;
     uint16_t m_d = 0x0000;
     uint64_t m_cycles = 0;
+    uint64_t m_fineCycles = 0;
     std::string m_instruction = "???";
     std::string m_bytes;
 };

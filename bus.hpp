@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "apu.hpp"
@@ -22,13 +23,17 @@ public:
     static constexpr uint16_t kScanlinesPerFrame = 262;
     /// One emulated TV frame — keep equal to `kCyclesPerScanline * kScanlinesPerFrame`.
     static constexpr uint64_t kCyclesPerFrame = kCyclesPerScanline * kScanlinesPerFrame;
+    /// Scanline length in CPU::fineCycles()'s finer (un-rounded, "×8") unit — see that
+    /// accessor's doc comment. Used only to derive m_hCounter at finer-than-instruction
+    /// resolution; scanline/NMI/DMA cadence still runs off kCyclesPerScanline above.
+    static constexpr uint64_t kFineCyclesPerScanline = kCyclesPerScanline * 8;
 
     explicit Bus(const std::vector<uint8_t>& rom, const std::string& savePath = "");
     ~Bus();
 
     void reset();
     // Returns true when VBlank starts and NMI should be delivered
-    bool stepPeripherals(uint64_t totalCycles);
+    bool stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles);
 
     // After stepPeripherals + optional triggerNmi/triggerIrq, call once per CPU step.
     // Wakes WAI on VBlank edges when NMITIMEN masks NMI (65C816 libs use WAI in WaitForVBlank).
@@ -42,6 +47,12 @@ public:
     /// ($420D bit0) actually speeds up execution instead of being ignored.
     unsigned accessSpeedCycles(uint8_t bank, uint16_t addr) const;
     bool fastRomEnabled() const { return m_fastRomEnabled; }
+
+    // The CPU is genuinely halted while GP-DMA runs — CPU::step() drains this (real master
+    // clocks, accumulated by write()'s $420B handler via Dma::trigger's return value) right
+    // after the instruction that triggered it, so its own cycles()/fineCycles() reflect the
+    // real elapsed time. Returns and resets to 0.
+    uint32_t takeDmaStolenMasterClocks() { return std::exchange(m_dmaStolenMasterClocks, 0u); }
 
     RomMapping mapMode() const;
     size_t sramBytes() const;
@@ -82,6 +93,9 @@ private:
     uint16_t m_vCounter   = 261;
     uint64_t m_lastCycles = 0;
     uint64_t m_cycleAccum = 0;
+    uint64_t m_lastFineCycles = 0;
+    uint64_t m_fineCycleAccum = 0;
+    uint32_t m_dmaStolenMasterClocks = 0;
     mutable bool m_hvcLatch = false;
     bool m_inVBlank = false;
 

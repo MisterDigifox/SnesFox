@@ -16,15 +16,22 @@ static const uint8_t kUnitOffsets[8][4] = {
 
 static const uint8_t kUnitSize[8] = { 1, 2, 2, 4, 4, 2, 2, 4 };
 
-void Dma::trigger(uint8_t enableMask, Bus& bus) {
+uint32_t Dma::trigger(uint8_t enableMask, Bus& bus) {
+    if (enableMask == 0) return 0;
+    // Matches ares CPU::dmaRun()/Channel::dmaRun() exactly: one flat 8-cycle overhead for the
+    // whole multi-channel write (not per channel), then per triggered channel 8 cycles
+    // overhead plus 8 cycles per byte transferred (each byte's real cost is its readA/readB
+    // side: step(4) before + step(4) after).
+    uint32_t masterClocks = 8;
     for (int c = 0; c < 8; ++c) {
         if (enableMask & (1 << c)) {
-            runChannel(c, bus);
+            masterClocks += 8 + runChannel(c, bus) * 8;
         }
     }
+    return masterClocks;
 }
 
-void Dma::runChannel(int ch, Bus& bus) {
+uint32_t Dma::runChannel(int ch, Bus& bus) {
     Channel& c = m_ch[ch];
 
     const bool toB   = !(c.ctrl & 0x80); // direction: 0=A→B, 1=B→A
@@ -65,6 +72,7 @@ void Dma::runChannel(int ch, Bus& bus) {
     // Update registers to reflect post-transfer state
     c.srcAddr   = srcA;
     c.byteCount = 0;
+    return transferred;
 }
 
 void Dma::stepA(Channel& c) {
@@ -141,12 +149,13 @@ void Dma::reset() {
     m_hdmaFrameEnable = 0;
 }
 
-bool Dma::hdmaReadLineCount(int ch, Bus& bus) {
+bool Dma::hdmaReadLineCount(int ch, Bus& bus, uint32_t& bytesRead) {
     Channel& c          = m_ch[ch];
     const bool indirect = (c.ctrl & 0x40) != 0;
 
     const uint8_t line = bus.read(c.hdmaCurBank, c.hdmaCurAddr);
     stepA(c);
+    ++bytesRead;
 
     if (line == 0) {
         // Terminator (snes9x also has indirect special case; treat as end for now)
@@ -169,6 +178,7 @@ bool Dma::hdmaReadLineCount(int ch, Bus& bus) {
         stepA(c);
         uint8_t hi = bus.read(c.hdmaCurBank, c.hdmaCurAddr);
         stepA(c);
+        bytesRead += 2;
         m_hdmaIndirectPtr[ch]  = static_cast<uint16_t>(lo | (static_cast<uint16_t>(hi) << 8));
         m_hdmaIndirectBank[ch] = c.unused7;
     }
@@ -176,8 +186,14 @@ bool Dma::hdmaReadLineCount(int ch, Bus& bus) {
     return true;
 }
 
-void Dma::beginHdmaFrame(uint8_t enableMask, Bus& bus) {
+uint32_t Dma::beginHdmaFrame(uint8_t enableMask, Bus& bus) {
     m_hdmaFrameEnable = enableMask;
+    if (enableMask == 0) return 0;
+
+    // Matches ares CPU::hdmaSetup(): one flat 8-cycle overhead for the whole per-frame setup
+    // pass, plus 8 cycles per byte actually read while reloading each enabled channel's first
+    // line-count entry (and indirect pointer, if set).
+    uint32_t masterClocks = 8;
     for (int ch = 0; ch < 8; ++ch) {
         if (!(enableMask & (1 << ch))) {
             m_hdmaActive[ch] = false;
@@ -192,14 +208,24 @@ void Dma::beginHdmaFrame(uint8_t enableMask, Bus& bus) {
         m_ch[ch].hdmaCurBank = m_ch[ch].srcBank;
         m_hdmaActive[ch] = true;
 
-        if (!hdmaReadLineCount(ch, bus)) {
+        uint32_t bytesRead = 0;
+        if (!hdmaReadLineCount(ch, bus, bytesRead)) {
             m_hdmaActive[ch] = false;
         }
+        masterClocks += bytesRead * 8;
     }
+    return masterClocks;
 }
 
-void Dma::runHdmaForScanline(int v, Bus& bus) {
+uint32_t Dma::runHdmaForScanline(int v, Bus& bus) {
     (void)v;
+    if (m_hdmaFrameEnable == 0) return 0;
+
+    // Matches ares CPU::hdmaRun(): one flat 8-cycle overhead every scanline HDMA runs at all
+    // (any channel frame-enabled, regardless of per-channel active status), plus 8 cycles per
+    // byte actually transferred, plus 8 cycles per byte read reloading a channel's line-count
+    // (and indirect pointer) entry when its line counter hits zero.
+    uint32_t masterClocks = 8;
     for (int ch = 0; ch < 8; ++ch) {
         if ((m_hdmaFrameEnable & (1 << ch)) == 0) continue;
         if (!m_hdmaActive[ch]) continue;
@@ -212,17 +238,21 @@ void Dma::runHdmaForScanline(int v, Bus& bus) {
             } else {
                 transferOneUnit(ch, bus);
             }
+            masterClocks += 8 * kUnitSize[m_ch[ch].ctrl & 0x07];
         }
 
         // snes9x: p->DoTransfer = !p->Repeat;
         m_hdmaDoTransfer[ch] = !m_hdmaSnesRepeat[ch];
 
         if (--m_hdmaLineCount[ch] == 0) {
-            if (!hdmaReadLineCount(ch, bus)) {
+            uint32_t bytesRead = 0;
+            if (!hdmaReadLineCount(ch, bus, bytesRead)) {
                 m_hdmaActive[ch] = false;
             }
+            masterClocks += bytesRead * 8;
         }
     }
+    return masterClocks;
 }
 
 uint8_t Dma::readReg(uint8_t ch, uint8_t reg) const {

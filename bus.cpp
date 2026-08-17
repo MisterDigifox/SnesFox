@@ -1,5 +1,6 @@
 #include "bus.hpp"
 #include "cpu.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 
@@ -79,13 +80,30 @@ void Bus::reset() {
     m_hCounter   = 0;
     m_cycleAccum = 0;
     m_lastCycles = 0;
+    m_fineCycleAccum = 0;
+    m_lastFineCycles = 0;
+    m_dmaStolenMasterClocks = 0;
 }
 
 uint8_t Bus::gsuReadRom(uint32_t address24) const {
     if (m_rom.empty()) return 0xFF;
-    // The GSU sees the cart ROM as one flat linear array (bank*0x10000+addr), bypassing
-    // the CPU's $8000-windowed LoROM view — this matches how the physical chip is wired.
-    return m_rom[address24 % m_rom.size()];
+    address24 &= 0xFFFFFF;
+    // The GSU's own ROM address decode (see ares SuperFX::read()) is NOT a flat
+    // bank*0x10000+addr array — banks $00-$3F use the LoROM half-bank formula (each 64KB
+    // bank mirrors the same 32KB chunk into both its $0000-7FFF and $8000-FFFF halves,
+    // since only 15 bits of intra-bank address are decoded), while banks $40-$5F are a
+    // direct/linear mirror of the same underlying ROM. PBR/ROMBR are masked to 7 bits by
+    // their register writes, but only 0x00-0x5F are valid GSU ROM banks (0x60+ falls
+    // through to RAM elsewhere); treat anything else as open bus.
+    uint32_t offset;
+    if ((address24 & 0xC00000) == 0x000000) {
+        offset = ((address24 & 0x3F0000) >> 1) | (address24 & 0x7FFF);
+    } else if ((address24 & 0xE00000) == 0x400000) {
+        offset = address24;
+    } else {
+        return 0x00;
+    }
+    return m_rom[offset % m_rom.size()];
 }
 
 void Bus::raiseGsuIrq() {
@@ -96,9 +114,11 @@ static constexpr uint16_t H_TOTAL   = 340;
 static constexpr uint16_t V_TOTAL   = Bus::kScanlinesPerFrame;
 static constexpr uint16_t VBLANK_START = 225;
 
-bool Bus::stepPeripherals(uint64_t totalCycles) {
+bool Bus::stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles) {
     const uint64_t delta = totalCycles - m_lastCycles;
     m_lastCycles = totalCycles;
+    const uint64_t fineDelta = totalFineCycles - m_lastFineCycles;
+    m_lastFineCycles = totalFineCycles;
 
     const uint16_t prevHIn = m_hCounter;
 
@@ -107,11 +127,19 @@ bool Bus::stepPeripherals(uint64_t totalCycles) {
     }
 
     m_cycleAccum += delta;
+    m_fineCycleAccum += fineDelta;
 
     bool nmiReturn = false;
 
     while (m_cycleAccum >= Bus::kCyclesPerScanline) {
         m_cycleAccum -= Bus::kCyclesPerScanline;
+        // Scanline/NMI/DMA cadence stays keyed off m_cycleAccum above (unchanged, already
+        // calibrated); m_fineCycleAccum is only consulted below to derive m_hCounter within
+        // the *current* scanline at finer resolution, so keep it in step with each scanline
+        // this loop consumes. The two accumulators track the same instruction stream but use
+        // independently-rounded per-instruction costs, so they can drift by a little — clamp
+        // rather than let an unsigned underflow wrap to a huge value.
+        m_fineCycleAccum -= std::min(m_fineCycleAccum, Bus::kFineCyclesPerScanline);
 
         const uint16_t oldV = m_vCounter;
 
@@ -119,7 +147,9 @@ bool Bus::stepPeripherals(uint64_t totalCycles) {
         if (m_vCounter >= V_TOTAL) {
             m_vCounter = 0;
             m_irqVMatch = false;
-            m_dma.beginHdmaFrame(m_reg420c, *this);
+            const uint32_t hdmaSetupStolen = m_dma.beginHdmaFrame(m_reg420c, *this);
+            m_cycleAccum += hdmaSetupStolen / 8;
+            m_fineCycleAccum += hdmaSetupStolen;
         }
 
         // Draw the line we just finished first — it must use BG scroll from HDMA at the *start*
@@ -129,7 +159,16 @@ bool Bus::stepPeripherals(uint64_t totalCycles) {
             m_ppu.renderScanline(static_cast<int>(oldV));
         }
 
-        m_dma.runHdmaForScanline(static_cast<int>(m_vCounter), *this);
+        // HDMA halts the CPU too (see Dma::runHdmaForScanline's doc comment) — unlike GP-DMA
+        // (triggered synchronously from a CPU instruction, so its steal is folded back into
+        // CPU::step()'s own counters), this runs autonomously off the scanline transition
+        // itself, so fold it straight into the accumulators driving that same transition.
+        // m_lastCycles/m_lastFineCycles deliberately stay tied to raw cpu.cycles()/
+        // fineCycles() — only the accumulators get the extra so it isn't double-counted next
+        // stepPeripherals() call.
+        const uint32_t hdmaStolen = m_dma.runHdmaForScanline(static_cast<int>(m_vCounter), *this);
+        m_cycleAccum += hdmaStolen / 8;
+        m_fineCycleAccum += hdmaStolen;
 
         if (m_irqMode != 0) {
             m_irqVMatch = (m_vCounter == m_vtime);
@@ -148,7 +187,7 @@ bool Bus::stepPeripherals(uint64_t totalCycles) {
         }
     }
 
-    m_hCounter = static_cast<uint16_t>((m_cycleAccum * H_TOTAL) / Bus::kCyclesPerScanline);
+    m_hCounter = static_cast<uint16_t>((m_fineCycleAccum * H_TOTAL) / Bus::kFineCyclesPerScanline);
 
     const bool nowVBlank = (m_vCounter >= VBLANK_START);
     m_inVBlank           = nowVBlank;
@@ -533,7 +572,7 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
                         ch, ctrl, bbus, bank, src, len,
                         s[0],s[1],s[2],s[3],s[4],s[5],s[6],s[7]);
                 }
-                m_dma.trigger(value, *this);
+                m_dmaStolenMasterClocks += m_dma.trigger(value, *this);
                 // Post-DMA VRAM snapshot at key addresses + first non-zero word
                 const uint16_t* vr = m_ppu.vram();
                 uint16_t firstNZ = 0xFFFF;
@@ -547,7 +586,7 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
                     vr[0x2000], vr[0x2001],
                     vr[0x6800], vr[0x6801]);
             } else {
-                m_dma.trigger(value, *this);
+                m_dmaStolenMasterClocks += m_dma.trigger(value, *this);
             }
         }
         return;
