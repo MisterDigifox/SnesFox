@@ -196,6 +196,7 @@ run may itself have been part of what got stripped. Chasing this needs
 StarFrog-specific object-lifecycle tracing (what should have cleared/skipped
 this object slot's "has a pending strategy call" flag, `$1D,X` bit `$80`),
 not general GSU/timing work — a different, narrower kind of investigation.
-See the (session-specific, ephemeral) plan file this was written up in for
-the full trace if it's still around, otherwise re-derive it with the method
-above: it reproduces deterministically from a fresh `starfrog.sfc` build.
+See `immutable-orbiting-treehouse.md` (alongside this file) for the full
+session log and trace this was written up from — it reproduces
+deterministically from a fresh `starfrog.sfc` build if you need to re-derive
+any of it.
