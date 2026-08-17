@@ -1127,12 +1127,10 @@ uint8_t GSU::readRegister(uint16_t addr) {
 
     switch (addr) {
     case 0x3030: {
-        const uint8_t lo = static_cast<uint8_t>(sfrRead());
-        m_irq = false;
-        return lo;
+        return static_cast<uint8_t>(sfrRead());
     }
     case 0x3031: {
-        const uint8_t hi = static_cast<uint8_t>((sfrRead() >> 8) & ~0x80u);
+        const uint8_t hi = static_cast<uint8_t>(sfrRead() >> 8);
         m_irq = false;
         return hi;
     }

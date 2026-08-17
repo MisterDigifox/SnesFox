@@ -74,16 +74,26 @@ for e in entries:
 
 3. **Trace main-CPU instructions**: `SNESFOX_CPU_TRACE=<N>
    SNESFOX_CPU_TRACE_ALWAYS=1 ./snesfox snap ...` prints
-   `[CPU bank:pc] MNEMONIC operand cyc=... p=.. a=.... x=.... sp=....` for
-   every instruction (without `_ALWAYS`, it only fires while
-   `bus.gsu().running()`, which is useless for debugging what the *main* CPU
-   is doing between GSU launches — always set `_ALWAYS=1` for that). N needs
-   to be large (millions) to reach anywhing deep into boot; redirect to a
-   file (`... > /tmp/trace.log 2>&1`, **not** `2>&1 > file` — that reorders
-   wrong in zsh and drops stderr) and grep/tail rather than trying to read
-   it inline. To find where execution is stuck in a loop: grep for a
-   suspected address (`grep -c "02:DCBF\]"`) or look for the same handful of
-   addresses repeating forever near the end of the file.
+   `[CPU bank:pc] MNEMONIC operand cyc=... p=.. a=.... x=.... y=.... sp=....
+   d=.... dbr=..` for every instruction (`y=`/`d=`/`dbr=` were added in a
+   later session — needed to reconstruct which physical WRAM address a
+   direct-page or absolute,Y instruction actually touched; don't assume
+   D=0/DBR=PBR without checking, that assumption cost real time once).
+   Without `_ALWAYS`, it only fires while `bus.gsu().running()`, which is
+   useless for debugging what the *main* CPU is doing between GSU launches —
+   always set `_ALWAYS=1` for that. N needs to be large (millions) to reach
+   anything deep into boot; redirect to a file (`... > /tmp/trace.log 2>&1`,
+   **not** `2>&1 > file` — that reorders wrong in zsh and drops stderr) and
+   grep/tail rather than trying to read it inline. To find where execution
+   is stuck in a loop: grep for a suspected address (`grep -c "02:DCBF\]"`)
+   or look for the same handful of addresses repeating forever near the end
+   of the file. `SNESFOX_WRAM_WATCH=<hex>` or `<hexLo>-<hexHi>` (`bus.cpp`)
+   is the complementary tool for "what value does this WRAM address actually
+   hold over time" — it logs every write that lands there (across all
+   bank/mirror combinations that resolve to the same physical byte) as
+   `[WRAM-WATCH #<seq>] bank=XX addr=XXXX <= XX`, which is what proved a
+   CPU-trace-observed "wrong value" was actually the CPU reading the wrong
+   *address*, not the memory holding wrong data.
 
 4. **Cross-reference real addresses against StarFrog's actual source.**
    `./snesfox disasm StarFrog/starfrog.sfc /tmp/out.asm` auto-labels
@@ -179,24 +189,54 @@ microseconds of boot" all the way through real GSU decompression, a
 previously-unresolvable H/V-counter wait loop, DMA setup, and several
 million cycles of legitimate subroutine calls.
 
+- **CPU direct-page,X/Y addressing truncated the index register to 8 bits
+  unconditionally** (22 call sites in `cpu.cpp`, e.g. `LDA dp,X`), even when
+  the X flag indicated 16-bit index mode — silently discarding the high byte
+  of any dp,X/dp,Y effective address ≥ 256. This is what earlier looked like
+  StarFrog's per-object "strategy pointer" dispatcher (`L_1FD313`) reading an
+  *uninitialized* WRAM field (`bank=$00,addr=$3000`, inside the GSU's own
+  MMIO window) — it wasn't uninitialized at all; the CPU was reading the
+  wrong address entirely (confirmed with a new `SNESFOX_WRAM_WATCH=<hex>`
+  Bus-level write-watchpoint — see `bus.cpp`). Fixed by using the full
+  `m_x`/`m_y` (already correctly zero-extended by `applyREP`/`applySEP`)
+  instead of an extra `& 0x00FF` mask.
+- **GSU `readRegister($3031)` masked out the IRQ bit (SFR bit 15) before
+  returning it to the CPU**, breaking the real "read once to observe it, the
+  read itself acknowledges it" IRQ contract; `$3030` also incorrectly cleared
+  the IRQ flag (only `$3031` should, per `ares-ref/sfc/coprocessor/superfx/
+  io.cpp`'s `readIO`). Fixed to match ares: return the true byte from
+  `$3031`, clear `m_irq` only there.
+- **`Bus::stepPeripherals`'s H-IRQ edge detector couldn't fire for
+  `HTIME=0`** — `prevHIn < m_htime` is unsatisfiable when `m_htime==0` since
+  `prevHIn` is unsigned. StarFrog configures H+V IRQ mode with `HTIME=0,
+  VTIME=0` (a normal, common "once per frame at scanline 0" pattern) once at
+  boot and never touches it again, so this IRQ never fired even a single
+  time in a 600-frame trace. Fixed by tracking whether a scanline boundary
+  was crossed this call and using that as the edge condition specifically
+  when `m_htime == 0`.
+
+These three (found together in one session, via the new `y=`/`d=`/`dbr=`
+`SNESFOX_CPU_TRACE` fields plus `SNESFOX_WRAM_WATCH`) took StarFrog from
+"wedged in an object dispatcher reading garbage" through a previously
+zero-firing per-frame IRQ, all the way to the title screen's screen turning
+on (`forcedBlank`→0), the GSU actively plotting pixels every frame
+(`plotCount` incrementing continuously), real non-black framebuffer output,
+and audio playing (non-zero RMS) — by frame ~900-1200 of `snap`.
+
 ## Known remaining issue (as of this writing)
 
-Past the point above, StarFrog hits a bug in its own per-object "strategy
-pointer" dispatcher (`L_1FD313` in the real source — builds a computed long
-jump by pushing a bank+address pulled from an object's WRAM fields, then
-`RTL`s into it, since 65816 has no indexed/indirect `JSL`). For the object
-slot being processed (`X=0` at the point this was found), those WRAM fields
-hold `bank=$00, addr=$3000` — inside the GSU's own MMIO window, not valid
-code, so execution runs off into garbage. This looks like an *uninitialized*
-strategy pointer rather than an emulator bug: `StarFrog/CLAUDE.md`'s
-"Stripping the game down to just the title screen" notes explicitly say
-every non-title screen is believed unreachable and was never verified once
-disabled — some object-slot initialization that a full boot would normally
-run may itself have been part of what got stripped. Chasing this needs
-StarFrog-specific object-lifecycle tracing (what should have cleared/skipped
-this object slot's "has a pending strategy call" flag, `$1D,X` bit `$80`),
-not general GSU/timing work — a different, narrower kind of investigation.
-See `immutable-orbiting-treehouse.md` (alongside this file) for the full
-session log and trace this was written up from — it reproduces
-deterministically from a fresh `starfrog.sfc` build if you need to re-derive
-any of it.
+The rendered image is still wrong: `/tmp/snap.ppm` (written automatically by
+`snap`) shows a stable (converged, not still-loading) field of incoherent
+colored noise across roughly the top-left two-thirds of the frame plus one
+correct-looking blue rectangle sprite — not a recognizable `petecube`/title
+layout. BG1's tilemap is populated (992/1024 nonzero) but suspiciously
+uniform (`02A1` repeating), and OBJ CHR has real-looking tile data (930/1024
+nonzero, arranged as a row of sprites that's plausibly the "STAR FROG" title
+text). This needs the same trace-and-diff treatment as the bugs above,
+focused this time on what the GSU is actually plotting into VRAM vs. what
+BG1/BG2's tilemap + CHR data downstream of that describe — likely either a
+GSU pixel-plot/color-mapping bug or a VRAM-write addressing issue, not a
+CPU/timing one. See `immutable-orbiting-treehouse.md` (alongside this file)
+for the full session logs and traces this was written up from — they
+reproduce deterministically from a fresh `starfrog.sfc` build if you need to
+re-derive any of it.

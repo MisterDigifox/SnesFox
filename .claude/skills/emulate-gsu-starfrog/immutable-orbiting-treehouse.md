@@ -225,36 +225,113 @@ round-trip still byte-identical, after every step):
    ~5,000,000 more cycles of legitimate-looking subroutine calls (this is the core milestone
    this whole timing investigation was chasing).
 
-**New, different bug found and root-caused (not yet fixed)** — this is StarFrog game-logic
-archaeology, not general emulator engineering. Re-traced with an added `sp=` trace field and
-found the earlier "RTI-corrupts-stack" read was a mis-diagnosis of a downstream *symptom*:
-walking back from the garbage-bank landing, the actual origin is a legitimate 65816 idiom at
-`L_1FD313` (found via `./snesfox disasm StarFrog/starfrog.sfc`, cross-referenced against real
-labels) — StarFrog's per-object "strategy pointer" dispatcher, which builds a computed long
-jump by pushing a bank+address pulled from an object's WRAM fields (`$1246`=bank, `$1244`=
-address, indexed by the object slot in `X`) and executing `RTL` to "return" into it (a common
-technique since 65816 has no indirect/indexed `JSL`). For the object slot being processed
-here (`X=0`), those fields hold `bank=$00, addr=$3000` — not a valid strategy-routine address
-at all (`$3000-$34FF` is the *GSU's own MMIO register window*, not code). This means either:
-this object's strategy pointer was never properly initialized (most likely, since it's exactly
-$00:$3000-ish — plausibly still-zeroed/leftover WRAM), or something upstream corrupted it.
+**Earlier write-up of this bug was a mis-diagnosis — corrected below.** A previous session
+pass, re-tracing with an added `sp=` field, walked back the garbage-bank landing to a
+legitimate 65816 idiom at `L_1FD313` — StarFrog's per-object "strategy pointer" dispatcher,
+which builds a computed long jump by pushing a bank+address pulled from an object's WRAM
+fields (`$1246`=bank, `$1244`=address, indexed by the object slot in `X`) and executing `RTL`
+to "return" into it. For the object being processed, those fields evaluated to
+`bank=$00, addr=$3000` — the GSU's own MMIO window, not code — and that session concluded
+this was most likely an *uninitialized object slot*, a StarFrog-content limitation from the
+"strip to title screen" edits rather than a general emulator bug. **That conclusion was
+wrong.** The next session (see below) proved the object's WRAM fields held the correct value
+the whole time (`$0B:$B53A`, set once at spawn and never touched again — confirmed with a new
+`SNESFOX_WRAM_WATCH=lo[-hi]` env var added to `bus.cpp` that logs every write to a WRAM
+address/range) — the CPU was simply computing the *wrong effective address* when reading them
+back.
 
-This is worth flagging clearly: `StarFrog/CLAUDE.md`'s own "Stripping the game down to just
-the title screen" notes say every screen except `title.asm` is believed unreachable and was
-never verified at runtime once disabled — object-slot/strategy-pointer initialization that
-would normally happen during a menu/level-transition boot path *that this stripped build
-deliberately never reaches* is a very plausible explanation for an uninitialized strategy
-pointer surfacing here. Chasing this further needs StarFrog-specific object-lifecycle tracing
-(what should have cleared/skipped object slot 0's "has a strategy call pending" flag at
-`$1D,X` bit `$80`, and whether that init path was itself part of what got stripped) — a
-different, narrower kind of investigation than the general timing work above.
+## Progress log, continued — the two real root causes
+
+Root-caused with the same "trace it, diff against ares/spec, fix, re-verify" method as above,
+this time using two new trace fields added to `CPU::step()`'s `SNESFOX_CPU_TRACE` line
+(`y=`/`d=`/`dbr=`, alongside the existing `a=`/`x=`/`sp=`) plus the new `SNESFOX_WRAM_WATCH`
+Bus-level write-watchpoint mentioned above:
+
+1. **CPU bug: Direct Page,X / Direct Page,Y addressing truncated the index register to 8 bits
+   even in 16-bit index mode.** `cpu.cpp`'s dp,X/dp,Y effective-address formulas (opcodes like
+   `LDA dp,X`, `STA dp,Y`, `INC dp,X`, etc. — 22 call sites in total, plus the two in the
+   cycle-timing pricing helper) all computed `m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF)` —
+   masking the index register down to 8 bits *unconditionally*, regardless of the X flag. Real
+   65816 behavior (confirmed empirically via `SNESFOX_WRAM_WATCH`, not just spec-reading): the
+   *full* current-width register is used, and `applyREP`/`applySEP` already zero-extend
+   `m_x`/`m_y` correctly whenever the X flag indicates 8-bit mode — so the extra mask was both
+   redundant in 8-bit mode and actively wrong in 16-bit mode, silently discarding the high byte
+   of any dp,X/dp,Y address with X/Y ≥ 256. StarFrog's per-object WRAM arrays (`al_size`=0x36
+   bytes × 70 objects ⇒ offsets up to ~0xEC4) are exactly this shape: `LDA $16,X` with `X=$0336`
+   (a real object's base offset) should read WRAM `$034C` but instead read `$004C` — unrelated,
+   effectively garbage data — which is where the "$00:$3000 strategy pointer" illusion came
+   from. Fixed by replacing all 22 occurrences of the masked expression with the plain
+   `m_d + b1 + m_x` / `m_d + b1 + m_y` (`cpu.cpp`). This is a **general CPU correctness bug**,
+   not StarFrog-specific — any ROM using 16-bit-indexed direct-page addressing with an index
+   ≥ 256 was affected.
+
+2. **GSU bug: reading SFR's high byte (`$3031`) masked out the IRQ bit before returning it to
+   the CPU, and reading the low byte (`$3030`) incorrectly cleared the IRQ flag too.**
+   `gsu.cpp::readRegister`'s `$3031` case did `(sfrRead() >> 8) & ~0x80u` — clearing bit 7 of
+   the *returned* high byte (SFR bit 15, the IRQ flag) even though the *internal* `m_irq` flag
+   was correctly cleared as the read's side effect, so real hardware's "read once to see it,
+   the read itself acknowledges it" contract was broken: the CPU could never actually observe
+   the IRQ bit set. Cross-checked against `ares-ref/sfc/coprocessor/superfx/io.cpp`'s
+   `readIO` (`case 0x3031: { n8 r = regs.sfr >> 8; regs.sfr.irq = 0; cpu.irq(0); return r; }`)
+   — ares returns the true, unmasked byte and clears the flag as a *separate* step. Also fixed
+   `$3030` (low-byte read) to no longer clear `m_irq` at all, matching ares (only the high-byte
+   read acknowledges the IRQ). This alone didn't explain StarFrog's specific hang (see next
+   item) but is a real, independently-verified divergence from hardware worth having fixed.
+
+3. **Bus bug: H-IRQ target of `$4207`/`$4208`=0 (HTIME=0) could never fire.** `Bus::
+   stepPeripherals`'s H-edge detector was `prevHIn < m_htime && m_hCounter >= m_htime` — a
+   "crossing" check that is structurally unsatisfiable when `m_htime == 0`, since `prevHIn` is
+   unsigned and can never be less than 0. StarFrog configures `$4200`=H+V IRQ mode with
+   `HTIME=0, VTIME=0` (a firmly real, common hardware pattern — effectively "IRQ once per frame
+   at the very start of scanline 0") once near boot and never touches it again; because HTIME=0
+   could never edge-trigger, this IRQ **never fired even once** in the entire run (confirmed:
+   zero occurrences of the copied-to-WRAM IRQ handler entry point across a full 600-frame,
+   2,000,000-instruction `SNESFOX_CPU_TRACE_ALWAYS` capture). StarFrog's main loop
+   (`$02:DA35: LDA $18BD / BEQ $DA35`) waits on a flag only the real IRQ handler
+   (`irqcode_l`, gated by `SG_extracted/nmi.asm`'s `.irq` — itself gated on GSU's SFR IRQ bit,
+   bug #2 above) ever sets, so the game wedged there forever once it reached that point. Fixed
+   by tracking whether a scanline boundary was crossed during a given `stepPeripherals` call
+   (`scanlineBoundaryCrossed`) and using that as the H-edge condition specifically when
+   `m_htime == 0` (the counter "reaching 0" for this target means "wrapped into a new
+   scanline", not "rose through 0" — a different check than the general case).
+
+**Result**, verified via `./snesfox snap StarFrog/starfrog.sfc <N>` before/after: the object
+dispatcher no longer derails into GSU MMIO space, the `$18BD` wait loop resolves, and the game
+progresses dramatically further — `forcedBlank` flips to 0 (screen turned on) around frame
+~900, `GSU plotCount` goes from stuck-at-0 to actively incrementing every frame (23068 by
+frame 1200), the framebuffer shows real non-black pixel data (~20K opaque px, ~15 unique
+colors) with plausible-looking sprite tiles (OBJ CHR 930/1024 nonzero words, arranged as a row
+of tiles at y≈182-183 — very plausibly the "STAR FROG" title text), and APU output has real
+non-zero RMS (music/SFX playing, not silence). **However, the rendered image itself is still
+wrong** — dumping `/tmp/snap.ppm` (written automatically by `snap`) shows a stable but
+incoherent field of colored noise filling roughly the top-left 2/3 of the frame plus one
+clean blue rectangle sprite, not a recognizable `petecube`/title layout — confirmed stable
+(byte-identical) between frame 1200 and frame 2000, so it's not still converging, just
+genuinely wrong content. **Next milestone**: BG1's tilemap (`nonzero=992/1024`, suspiciously
+uniform `02A1` filler) and/or GSU's pixel-plot → VRAM path are the most likely next suspects —
+this needs the same trace-and-diff treatment as the bugs above, focused on what GSU is
+actually plotting into VRAM vs. what the BG1/BG2 tilemaps + CHR data downstream of that
+describe.
+
+## New debug tooling added this session
+- `SNESFOX_WRAM_WATCH=<hex>` or `SNESFOX_WRAM_WATCH=<hexLo>-<hexHi>` (`bus.cpp`): logs every
+  write that lands in WRAM (any bank/mirror combination that resolves to the same physical
+  byte) within that address or range to stderr as `[WRAM-WATCH #<seq>] bank=XX addr=XXXX <=
+  XX`. Use this instead of grepping `SNESFOX_CPU_TRACE` for `STA` instructions by hand when you
+  need to know the *actual stored value* at a WRAM location over time, independent of which
+  addressing mode/bank a given instruction used to reach it (mirrors, DBR-relative absolute,
+  and direct-page all funnel through the same watch).
+- `SNESFOX_CPU_TRACE`'s line format gained `y=`, `d=`, and `dbr=` fields (alongside the
+  pre-existing `a=`/`x=`/`sp=`) — needed to diagnose bug #1 above (couldn't tell whether the
+  CPU was really using DP=0 without a `d=` field, or reconstruct which physical WRAM object a
+  given `X` value pointed at without `y=`/`dbr=` to cross-reference against absolute,Y writes
+  in other routines).
 
 ## Verification
 - `./build.sh` succeeds.
-- `./snesfox selftest` passes (22/22 as of the last session).
+- `./snesfox selftest` passes (22/22).
 - `./check.sh` still passes (unaffected, but cheap to confirm nothing broke).
 - `./release.sh`'s `cmp hello_world.sfc out.sfc` round-trip stays byte-identical.
-- `./snesfox snap StarFrog/starfrog.sfc <N>` — the H/V-counter wait loop no
-  longer wedges (confirmed fixed); next milestone is `plotCount > 0` and
-  non-black framebuffer output once the object-strategy-pointer bug above is
-  resolved.
+- `./snesfox snap StarFrog/starfrog.sfc <N>` — both the object-dispatcher derail and the
+  `$18BD` wait loop are confirmed fixed; current milestone reached is real (if visually
+  incorrect) rendered output — see "Result" above for exact frame numbers/metrics.

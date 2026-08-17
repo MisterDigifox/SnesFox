@@ -775,9 +775,9 @@ void CPU::step(Bus& bus) {
         static bool traceAlways = std::getenv("SNESFOX_CPU_TRACE_ALWAYS") != nullptr;
         if (traceLeft > 0 && bus.hasSuperFx() && (traceAlways || bus.gsu().running())) {
             --traceLeft;
-            std::fprintf(stderr, "[CPU %02X:%04X] %-20s cyc=%llu p=%02X a=%04X x=%04X sp=%04X\n",
+            std::fprintf(stderr, "[CPU %02X:%04X] %-20s cyc=%llu p=%02X a=%04X x=%04X y=%04X sp=%04X d=%04X dbr=%02X\n",
                          fetchBank, fetchPc, m_instruction.c_str(),
-                         static_cast<unsigned long long>(m_cycles), m_p, m_a, m_x, m_sp);
+                         static_cast<unsigned long long>(m_cycles), m_p, m_a, m_x, m_y, m_sp, m_d, m_db);
         }
     }
 
@@ -902,7 +902,7 @@ void CPU::step(Bus& bus) {
         break;
 
         case 0xA1: { // LDA (dp,X)
-            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + m_x);
             const uint16_t addr = busRead16(bus, 0x00, dp);
 
             if (flagSet(m_p, FLAG_M)) {
@@ -1051,7 +1051,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0xB5: { // LDA dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
 
             if (flagSet(m_p, FLAG_M)) {
                 const uint8_t value = bus.read(0x00, addr);
@@ -1138,7 +1138,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x74: { // STZ dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
         
             if (flagSet(m_p, FLAG_M)) {
                 bus.write(0x00, addr, 0);
@@ -1175,7 +1175,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x81: { // STA (dp,X)
-            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + m_x);
             const uint16_t addr = busRead16(bus, 0x00, dp);
         
             if (flagSet(m_p, FLAG_M)) {
@@ -1286,7 +1286,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x95: { // STA dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
         
             if (flagSet(m_p, FLAG_M)) {
                 bus.write(0x00, addr, static_cast<uint8_t>(m_a & 0x00FF));
@@ -1391,7 +1391,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0xB6: { // LDX dp,Y
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_y & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_y);
         
             if (flagSet(m_p, FLAG_X)) {
                 const uint8_t value = bus.read(0x00, addr);
@@ -1442,7 +1442,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x96: { // STX dp,Y
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_y & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_y);
         
             if (flagSet(m_p, FLAG_X)) {
                 bus.write(0x00, addr, static_cast<uint8_t>(m_x & 0x00FF));
@@ -1492,7 +1492,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0xB4: { // LDY dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
         
             if (flagSet(m_p, FLAG_X)) {
                 const uint8_t value = bus.read(0x00, addr);
@@ -1543,7 +1543,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x94: { // STY dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
         
             if (flagSet(m_p, FLAG_X)) {
                 bus.write(0x00, addr, static_cast<uint8_t>(m_y & 0x00FF));
@@ -2033,7 +2033,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x01: { // ORA (dp,X)
-            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + m_x);
             const uint16_t addr = busRead16(bus, 0x00, dp);
         
             if (flagSet(m_p, FLAG_M)) ora8(bus.read(m_db, addr), m_a, m_p);
@@ -2115,7 +2115,7 @@ void CPU::step(Bus& bus) {
         }
         
         case 0x15: { // ORA dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
         
             if (flagSet(m_p, FLAG_M)) ora8(bus.read(0x00, addr), m_a, m_p);
             else ora16(busRead16(bus, 0x00, addr), m_a, m_p);
@@ -2162,7 +2162,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x21: { // AND (dp,X)
-            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + m_x);
             const uint16_t addr = busRead16(bus, 0x00, dp);
         
             if (flagSet(m_p, FLAG_M)) and8(bus.read(m_db, addr), m_a, m_p);
@@ -2244,7 +2244,7 @@ void CPU::step(Bus& bus) {
         }
         
         case 0x35: { // AND dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
         
             if (flagSet(m_p, FLAG_M)) and8(bus.read(0x00, addr), m_a, m_p);
             else and16(busRead16(bus, 0x00, addr), m_a, m_p);
@@ -2291,7 +2291,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x41: { // EOR (dp,X)
-            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + m_x);
             const uint16_t addr = busRead16(bus, 0x00, dp);
         
             if (flagSet(m_p, FLAG_M)) eor8(bus.read(m_db, addr), m_a, m_p);
@@ -2373,7 +2373,7 @@ void CPU::step(Bus& bus) {
         }
         
         case 0x55: { // EOR dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
         
             if (flagSet(m_p, FLAG_M)) eor8(bus.read(0x00, addr), m_a, m_p);
             else eor16(busRead16(bus, 0x00, addr), m_a, m_p);
@@ -2893,7 +2893,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x34: { // BIT dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
 
             if (flagSet(m_p, FLAG_M)) bit8(bus.read(0x00, addr), m_a, m_p);
             else bit16(busRead16(bus, 0x00, addr), m_a, m_p);
@@ -2969,7 +2969,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x61: { // ADC (dp,X)
-            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + m_x);
             const uint16_t addr = busRead16(bus, 0x00, dp);
 
             if (flagSet(m_p, FLAG_M)) adc8(bus.read(m_db, addr), m_a, m_p);
@@ -3051,7 +3051,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0x75: { // ADC dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
 
             if (flagSet(m_p, FLAG_M)) adc8(bus.read(0x00, addr), m_a, m_p);
             else adc16(busRead16(bus, 0x00, addr), m_a, m_p);
@@ -3098,7 +3098,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0xE1: { // SBC (dp,X)
-            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t dp = static_cast<uint16_t>(m_d + b1 + m_x);
             const uint16_t addr = busRead16(bus, 0x00, dp);
 
             if (flagSet(m_p, FLAG_M)) sbc8(bus.read(m_db, addr), m_a, m_p);
@@ -3180,7 +3180,7 @@ void CPU::step(Bus& bus) {
         }
 
         case 0xF5: { // SBC dp,X
-            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            const uint16_t addr = static_cast<uint16_t>(m_d + b1 + m_x);
 
             if (flagSet(m_p, FLAG_M)) sbc8(bus.read(0x00, addr), m_a, m_p);
             else sbc16(busRead16(bus, 0x00, addr), m_a, m_p);
@@ -3366,11 +3366,11 @@ void CPU::step(Bus& bus) {
             operandBank = 0x00;
             break;
         case AddrMode::DirectPageX:
-            operandAddr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_x & 0x00FF));
+            operandAddr = static_cast<uint16_t>(m_d + b1 + m_x);
             operandBank = 0x00;
             break;
         case AddrMode::DirectPageY:
-            operandAddr = static_cast<uint16_t>(m_d + b1 + static_cast<uint8_t>(m_y & 0x00FF));
+            operandAddr = static_cast<uint16_t>(m_d + b1 + m_y);
             operandBank = 0x00;
             break;
         default:
