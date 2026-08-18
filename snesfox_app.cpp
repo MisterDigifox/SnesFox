@@ -389,6 +389,14 @@ DebugPanel makeDebugPanel(
     }
     panel.sections.push_back(std::move(ppuSection));
 
+    panel.bgMode = ppu.bgMode();
+    for (int i = 0; i < 4; ++i) {
+        panel.bgTilemapBase[i] = static_cast<uint16_t>((ppu.bgSC(i) >> 2) * 0x400);
+        const uint8_t nba = (i >> 1) ? ppu.bgNBA34() : ppu.bgNBA12();
+        const int shift = (i & 1) ? 4 : 0;
+        panel.bgChrBase[i] = static_cast<uint16_t>(((nba >> shift) & 0x0F) * 0x1000);
+    }
+
     panel.showTiles = true;
     decodeTileSheet(ppu.vram(), ppu.cgram(), panel.tileSheetArgb);
 

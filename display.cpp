@@ -440,6 +440,29 @@ void Display::drawBottomPanel(const DebugPanel& panel) {
     ImGui::End();
 }
 
+// Small strip directly under the emulated game framebuffer (same x-span, in the otherwise-empty
+// area below it since the Tiles Viewer/right panel columns don't extend under the game view).
+void Display::drawGameInfoPanel(const DebugPanel& panel) {
+    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(GAME_DST_X), static_cast<float>(WINDOW_HEIGHT)));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(GAME_DST_W), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
+    ImGui::Begin("Game Info", nullptr, kBottomPanelFlags);
+
+    ImGui::SeparatorText("BG Mode");
+    ImGui::Text("Mode: %d", panel.bgMode);
+
+    ImGui::SeparatorText("BG Tilemaps");
+    ImGui::Text("BG1: $%04X  BG2: $%04X  BG3: $%04X  BG4: $%04X",
+                 panel.bgTilemapBase[0], panel.bgTilemapBase[1],
+                 panel.bgTilemapBase[2], panel.bgTilemapBase[3]);
+
+    ImGui::SeparatorText("BG Tilesets");
+    ImGui::Text("BG1: $%04X  BG2: $%04X  BG3: $%04X  BG4: $%04X",
+                 panel.bgChrBase[0], panel.bgChrBase[1],
+                 panel.bgChrBase[2], panel.bgChrBase[3]);
+
+    ImGui::End();
+}
+
 PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) {
     // Create streaming texture once
     if (!m_frameTex) {
@@ -465,6 +488,7 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
     drawLeftPanel(panel.sections, panel.instructionLog);
     drawRightPanel(panel);
     drawBottomPanel(panel);
+    drawGameInfoPanel(panel);
 
     // Divider lines: drawn via a plain (non-popup) ImGui window's own draw list rather
     // than a raw SDL_RenderDrawLine after ImGui::Render(). A raw SDL draw paints over

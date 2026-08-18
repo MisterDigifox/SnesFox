@@ -37,6 +37,9 @@ struct DebugPanel {
     std::vector<std::string> instructionLog;
     bool showTiles = false;
     std::array<uint32_t, kTileSheetW * kTileSheetH> tileSheetArgb{}; // row-major, resolved via palette 0
+    std::array<uint16_t, 4> bgTilemapBase{}; // VRAM word address of BG1-4's tilemap base ((BGxSC>>2)*0x400)
+    std::array<uint16_t, 4> bgChrBase{};     // VRAM word address of BG1-4's tileset/CHR base (Ppu::chrBase)
+    uint8_t bgMode = 0;                      // current BG mode (0-7), Ppu::bgMode()
 };
 
 // Result of clicking a palette swatch and hitting Apply in the editor popup.
@@ -72,6 +75,7 @@ private:
     void drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog);
     void drawRightPanel(const DebugPanel& panel);
     void drawBottomPanel(const DebugPanel& panel);
+    void drawGameInfoPanel(const DebugPanel& panel);
 
     SDL_Window*   m_window       = nullptr;
     SDL_Renderer* m_renderer     = nullptr;
