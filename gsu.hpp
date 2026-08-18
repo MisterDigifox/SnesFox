@@ -195,6 +195,8 @@ private:
     PixelCache m_pixelCache[2]{};
 
     uint8_t m_pipeline = 0;
+    uint16_t m_pipelineAddr = 0;  // ROM address whose byte currently sits in m_pipeline
+    bool m_pipelineValid = false; // whether m_pipelineAddr is meaningful yet (false at reset/after STOP)
     uint16_t m_ramaddr = 0;
     uint32_t m_romaddr = 0;
     uint16_t m_cbr = 0;

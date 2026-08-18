@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 
@@ -46,6 +47,7 @@ void GSU::reset() {
     m_pixelCache[1].offset = 0xFFFF;
 
     m_pipeline = 0x01; // NOP — matches ares; 0x00 would execute STOP on first fetch
+    m_pipelineValid = false; // forces the first peekpipe() after launch to actually refetch
     m_debugLog.fill(DebugLogEntry{});
     m_debugLogPos = 0;
     m_debugLogCount = 0;
@@ -176,23 +178,38 @@ void GSU::mainStep(GsuHost& host) {
                      pbrBefore, pcBefore, opcode, m_r[1], m_r[2], m_r[14], sfrRead());
     }
 
-    // Only starts tracing once PC actually enters [lo,hi] — avoids paying for every earlier
-    // launch just to reach one specific hot loop. SNESFOX_GSU_RANGE_TRACE=lo-hi[:count]
+    // Only starts tracing once PC actually enters [lo,hi] *and* launchCount has reached
+    // minLaunch — avoids paying for every earlier launch just to reach one specific hot loop
+    // late in boot. SNESFOX_GSU_RANGE_TRACE=lo-hi[:count[:minLaunch]]
     static const char* rangeEnv = std::getenv("SNESFOX_GSU_RANGE_TRACE");
     static uint16_t rangeLo = 0, rangeHi = 0;
     static int rangeCount = 2000;
+    static unsigned rangeMinLaunch = 0;
     static bool rangeParsed = false;
     static int rangeLeft = -1;
     if (rangeEnv && !rangeParsed) {
         rangeParsed = true;
-        unsigned lo = 0, hi = 0, cnt = 2000;
-        if (std::sscanf(rangeEnv, "%x-%x:%d", &lo, &hi, &cnt) >= 2) {
+        unsigned lo = 0, hi = 0, cnt = 2000, minLaunch = 0;
+        if (std::sscanf(rangeEnv, "%x-%x:%d:%u", &lo, &hi, &cnt, &minLaunch) >= 2) {
             rangeLo = static_cast<uint16_t>(lo);
             rangeHi = static_cast<uint16_t>(hi);
             rangeCount = cnt;
+            rangeMinLaunch = minLaunch;
         }
     }
-    const bool inRange = rangeEnv && pcBefore >= rangeLo && pcBefore <= rangeHi;
+    const bool inRange = rangeEnv && m_launchCount >= rangeMinLaunch
+        && pcBefore >= rangeLo && pcBefore <= rangeHi;
+
+    // One-shot, unconditional (every launch, not gated by RANGE_TRACE) entry marker for the
+    // dlptr-lazy-reinit follow-on block at $01:B2ED, to distinguish "good" (r12 legitimately
+    // small, LOOP falls through) visits from the known-bad ones (r12 garbage, LOOP misfires
+    // into the unrelated fill-loop template via a stale r13).
+    if (std::getenv("SNESFOX_GSU_B2ED_TRACE") && m_pbr == 0x01 && pcBefore == 0xB2ED) {
+        std::fprintf(stderr,
+            "[B2ED-ENTRY] launch=%u r2=%04X r7=%04X r9=%04X r12=%04X r13=%04X\n",
+            m_launchCount, m_r[2], m_r[7], m_r[9], m_r[12], m_r[13]);
+    }
+
     if (inRange && rangeLeft < 0) {
         rangeLeft = rangeCount;
     }
@@ -201,9 +218,10 @@ void GSU::mainStep(GsuHost& host) {
     if (rangeLeft > 0) {
         --rangeLeft;
         std::fprintf(stderr,
-            "[RNG %02X:%04X] op=%02X r0=%04X r1=%04X r2=%04X r3=%04X r7=%04X r9=%04X r11=%04X "
-            "sreg=%u dreg=%u ramaddr=%04X sfr=%04X\n",
-            pbrBefore, pcBefore, opcode, m_r[0], m_r[1], m_r[2], m_r[3], m_r[7], m_r[9], m_r[11],
+            "[RNG launch=%u %02X:%04X] op=%02X r0=%04X r1=%04X r2=%04X r3=%04X r7=%04X r9=%04X "
+            "r10=%04X r11=%04X r12=%04X r13=%04X sreg=%u dreg=%u ramaddr=%04X sfr=%04X\n",
+            m_launchCount, pbrBefore, pcBefore, opcode, m_r[0], m_r[1], m_r[2], m_r[3], m_r[7],
+            m_r[9], m_r[10], m_r[11], m_r[12], m_r[13],
             m_sreg & 0xF, m_dreg & 0xF, m_ramaddr, sfrRead());
     }
 
@@ -215,25 +233,30 @@ void GSU::mainStep(GsuHost& host) {
         updateRomBuffer();
     }
 
-    static const bool noAc1dHack = std::getenv("SNESFOX_GSU_NO_AC1D_HACK") != nullptr;
-    if (!noAc1dHack && m_go && m_launchRombr == 0 && m_lastLaunchR15 == 0xAC1D && m_sessionCycles > 250000) {
-        m_irq = true;
-        if (m_cfgrIrq) {
-            host.onGsuIrq();
-        }
-        syncRamBuffer(host);
-        onStop(m_r[15], host);
-        flushPixelCache(host, m_pixelCache[1]);
-        flushPixelCache(host, m_pixelCache[0]);
-        m_go = false;
-        m_pipeline = 0x01;
-        resetPrefixes();
-    }
-
-    if (m_r15Modified) {
+    // Belt-and-suspenders, matching the r14/updateRomBuffer check above: any instruction whose
+    // destination register (via TO/WITH prefix chaining — dr() when m_dreg==15) happens to land
+    // on r15 must suppress the auto-increment below, but only a few call sites (setR15/addR15,
+    // IWT/LM/SM when n==15) explicitly set m_r15Modified. Plain register-family ops that can
+    // also target r15 as their dr() (LOAD chief among them — this is exactly the "to pc / ldw
+    // (rsp)" idiom real GSU code uses for a stack-based subroutine return, e.g. mpop pc) do not,
+    // so relying on m_r15Modified alone silently incremented a just-restored return address by
+    // one, corrupting every register-indirect jump/return that isn't IWT/branch/JMP-based. Ares's
+    // Register wrapper avoids this class of bug entirely by tracking "modified" on every write;
+    // our raw uint16_t register file has no such hook, so fall back to comparing against the
+    // pre-instruction value instead of auditing/patching every dr()-writing instruction site.
+    if (m_r15Modified || m_r[15] != pcBefore) {
         m_r15Modified = false;
     } else {
         ++m_r[15];
+    }
+
+    // POST-execution instruction-boundary trace: m_r[15] here is fully resolved (no pipeline
+    // lag) and is genuinely the address of the next instruction about to be queued - unlike
+    // pcBefore/opcode above, safe to compare directly against static disassembly addresses.
+    if (std::getenv("SNESFOX_GSU_POST_TRACE") && m_pbr == 0x01
+        && m_r[15] >= 0xB180 && m_r[15] <= 0xB200) {
+        std::fprintf(stderr, "[POST] launch=%u next-pc=$01:%04X r12=%04X r13=%04X\n",
+            m_launchCount, m_r[15], m_r[12], m_r[13]);
     }
 
     ++m_sessionCycles;
@@ -243,6 +266,12 @@ void GSU::tick(uint32_t clocks, GsuHost& host) {
     if (clocks == 0) return;
     const uint32_t elapsed = clocks;
 
+    // ROM and RAM pending-buffer timers run independently (each counts down the full
+    // `clocks` amount, ares timing.cpp's SuperFX::step) — not sequentially off a shared,
+    // shrinking budget. Consuming `clocks` on the ROM branch before checking RAM here used
+    // to shortchange a simultaneously-pending RAM write's countdown, delaying when it
+    // actually commits into RAM (and, transitively, how long syncRamBuffer must wait for a
+    // read of that same address to observe the new value instead of stale data).
     if (m_romcl > 0) {
         const uint32_t step = std::min(clocks, m_romcl);
         m_romcl -= step;
@@ -250,16 +279,14 @@ void GSU::tick(uint32_t clocks, GsuHost& host) {
             m_romFlag = false;
             m_romdr = readRom(host, m_romaddr);
         }
-        clocks -= step;
     }
 
-    if (m_ramcl > 0 && clocks > 0) {
+    if (m_ramcl > 0) {
         const uint32_t step = std::min(clocks, m_ramcl);
         m_ramcl -= step;
         if (m_ramcl == 0) {
             writeRam(host, m_ramar, m_ramdr);
         }
-        clocks -= step;
     }
 
     m_cycles += elapsed;
@@ -272,14 +299,47 @@ void GSU::tick(uint32_t clocks, GsuHost& host) {
 
 uint8_t GSU::peekpipe(GsuHost& host) {
     const uint8_t result = m_pipeline;
-    m_pipeline = readOpcode(host, m_r[15]);
+    // Only refetch when m_pipeline's known address (m_pipelineAddr, tracked by pipe() below)
+    // doesn't match the current r15 — i.e. skip it when the *previous* instruction's last
+    // `pipe()` call already fetched from wherever r15 currently sits (pipe()'s fetch-and-advance
+    // are fused: it reads from, and lands r15 exactly on, the same address). Refetching
+    // unconditionally here instead (an unqualified `readOpcode(m_r[15])` every call, matching a
+    // literal reading of ares's `peekpipe()`) redundantly re-reads that same byte instead of the
+    // genuinely-next one, and since this delivered value survives untouched into whatever
+    // instruction runs next: a single-byte instruction with no pipe() calls of its own to
+    // overwrite it gets its execution silently duplicated one cycle later, while a multi-byte
+    // instruction gets its own first operand corrupted into a repeat of its own opcode byte.
+    // The address-equality check (rather than a plain "was the last op multi-byte" flag) also
+    // self-corrects after a taken branch/jump for free: pipe()'s own displacement/operand read
+    // still marks the *fall-through* address fresh, but setR15()/addR15() then move r15 to the
+    // branch target, which no longer matches m_pipelineAddr — correctly forcing a real refetch
+    // from the target next time, with no extra bookkeeping needed at the jump site.
+    // Confirmed empirically against real, shipped Argonaut GSU code (StarFox/SG_extracted -
+    // `mdrawlis.mc`/`mobj.mc`/`mtxtprt.mc`/etc all contain consecutive `iwt`/`iwt` pairs with no
+    // padding between them, which only work if this fetch is properly deduplicated) and via a
+    // standalone harness that reproduced the corruption byte-for-byte before this fix.
+    if (!m_pipelineValid || m_pipelineAddr != m_r[15]) {
+        m_pipeline = readOpcode(host, m_r[15]);
+        m_pipelineAddr = m_r[15];
+        m_pipelineValid = true;
+    }
     m_r15Modified = false;
     return result;
 }
 
 uint8_t GSU::pipe(GsuHost& host) {
     const uint8_t result = m_pipeline;
-    m_pipeline = readOpcode(host, static_cast<uint16_t>(m_r[15] + 1));
+    const uint16_t fetchAddr = static_cast<uint16_t>(m_r[15] + 1);
+    m_pipeline = readOpcode(host, fetchAddr);
+    // This fetch already lands r15 (below) on fetchAddr - the queue is fresh (m_pipelineAddr
+    // will equal r15) for whatever runs next, so the following peekpipe() must not redundantly
+    // re-read it. See peekpipe()'s comment for the full explanation.
+    m_pipelineAddr = fetchAddr;
+    m_pipelineValid = true;
+    if (std::getenv("SNESFOX_GSU_PIPE_TRACE")) {
+        std::fprintf(stderr, "[PIPE] r15=%04X result=%02X fetchAddr=%04X newPipeline=%02X\n",
+            m_r[15], result, fetchAddr, m_pipeline);
+    }
     ++m_r[15];
     m_r15Modified = false;
     return result;
@@ -400,11 +460,33 @@ uint8_t GSU::readRam(GsuHost& host, uint16_t address) {
     return host.read(bank, address);
 }
 
+static void debugGsuRamWatch(uint8_t pbr, uint16_t pc, uint16_t addr, uint8_t value,
+                              uint16_t r1, uint16_t r10, uint16_t r11, uint16_t r12,
+                              uint16_t r13, uint32_t launchCount) {
+    static const char* watchEnv = std::getenv("SNESFOX_GSU_RAM_WATCH");
+    static uint16_t watchLo = watchEnv ? static_cast<uint16_t>(std::strtol(watchEnv, nullptr, 16)) : 0xFFFF;
+    static uint16_t watchHi = [] {
+        if (!watchEnv) return static_cast<uint16_t>(0xFFFE);
+        const char* dash = std::strchr(watchEnv, '-');
+        return dash ? static_cast<uint16_t>(std::strtol(dash + 1, nullptr, 16))
+                    : static_cast<uint16_t>(std::strtol(watchEnv, nullptr, 16));
+    }();
+    static unsigned long writeSeq = 0;
+    ++writeSeq;
+    if (watchLo != 0xFFFF && addr >= watchLo && addr <= watchHi) {
+        std::fprintf(stderr, "[GSU-RAM-WATCH #%lu] launch=%u pc=$%02X:%04X addr=%04X <= %02X "
+            "r1=%04X r10=%04X r11=%04X r12=%04X r13=%04X\n",
+            writeSeq, launchCount, pbr, pc, addr, value, r1, r10, r11, r12, r13);
+    }
+}
+
 void GSU::writeRam(GsuHost& host, uint16_t address, uint8_t value) {
     if (!m_scmrRan) {
         tick(6, host);
         return;
     }
+    debugGsuRamWatch(m_pbr, m_r[15], address, value, m_r[1], m_r[10], m_r[11], m_r[12], m_r[13],
+        m_launchCount);
     if (address < m_sessionMinRamAddr) {
         m_sessionMinRamAddr = address;
     }
@@ -848,12 +930,22 @@ void GSU::insnSTOP(GsuHost& host) {
 
     m_go = false;
     m_pipeline = 0x01;
+    m_pipelineValid = false; // forces the next launch's first peekpipe() to actually refetch
     resetPrefixes();
 }
 
 void GSU::insnNOP() { resetPrefixes(); }
 
 void GSU::insnCACHE() {
+    static const char* traceEnv = std::getenv("SNESFOX_GSU_CACHE_TRACE");
+    static long traceMinLaunch = traceEnv ? std::strtol(traceEnv, nullptr, 10) : -1;
+    if (traceEnv && static_cast<long>(m_launchCount) >= traceMinLaunch
+        && m_pbr == 0x01 && m_r[15] >= 0xB0A0 && m_r[15] <= 0xB0FF) {
+        std::fprintf(stderr,
+            "[CACHE-ENTRY] launch=%u pc=$%02X:%04X r1=%04X r10=%04X r11=%04X r12=%04X r13=%04X\n",
+            m_launchCount, m_pbr, m_r[15], m_r[1], m_r[10], m_r[11], m_r[12], m_r[13]);
+    }
+
     const uint16_t newCbr = static_cast<uint16_t>(m_r[15] & 0xFFF0);
     if (m_cbr != newCbr) {
         m_cbr = newCbr;
@@ -903,6 +995,28 @@ void GSU::insnWITH(uint8_t n) {
 
 void GSU::insnStore(uint8_t n, GsuHost& host) {
     m_ramaddr = m_r[n];
+
+    static const char* traceEnv = std::getenv("SNESFOX_GSU_STW_TRACE");
+    if (traceEnv && n == 1 && m_pbr == 0x01 && m_r[15] >= 0xB0A0 && m_r[15] <= 0xB0FF) {
+        static uint16_t lastAddr = 0;
+        static bool haveLast = false;
+        static uint32_t lastLaunch = 0xFFFFFFFFu;
+        const int32_t delta = haveLast
+            ? (static_cast<int32_t>(m_ramaddr) - static_cast<int32_t>(lastAddr)) : 0;
+        const bool launchChanged = (lastLaunch != m_launchCount);
+        // Normal steady-state is +2 per store (one INC R1 in the loop body, one in the delay
+        // slot) within the same launch; only log discontinuities/launch boundaries so this stays
+        // a sparse signal instead of one line per store.
+        if (!haveLast || delta != 2 || launchChanged) {
+            std::fprintf(stderr,
+                "[STW] launch=%u pc=$%02X:%04X addr=%04X r12=%04X r13=%04X (delta=%d launchChanged=%d)\n",
+                m_launchCount, m_pbr, m_r[15], m_ramaddr, m_r[12], m_r[13], delta, launchChanged ? 1 : 0);
+        }
+        lastAddr = m_ramaddr;
+        haveLast = true;
+        lastLaunch = m_launchCount;
+    }
+
     writeRamBuffer(host, m_ramaddr, static_cast<uint8_t>(sr()));
     if (!m_alt1) {
         writeRamBuffer(host, static_cast<uint16_t>(m_ramaddr ^ 1), static_cast<uint8_t>(sr() >> 8));
@@ -914,6 +1028,33 @@ void GSU::insnLOOP() {
     m_r[12] = static_cast<uint16_t>(m_r[12] - 1);
     m_s = (m_r[12] & 0x8000) != 0;
     m_z = m_r[12] == 0;
+
+    static const char* traceEnv = std::getenv("SNESFOX_GSU_LOOP_TRACE");
+    static long traceMinLaunch = traceEnv ? std::strtol(traceEnv, nullptr, 10) : -1;
+    if (traceEnv && static_cast<long>(m_launchCount) >= traceMinLaunch
+        && (m_r[12] <= 5 || m_r[12] >= 0xFFFB)) {
+        std::fprintf(stderr,
+            "[LOOP] launch=%u pc=$%02X:%04X r12=%04X z=%d take=%d r13=%04X r1=%04X r11=%04X\n",
+            m_launchCount, m_pbr, m_r[15], m_r[12], m_z ? 1 : 0, m_z ? 0 : 1, m_r[13], m_r[1], m_r[11]);
+    }
+
+    // Catches a LOOP instruction whose branch target (r13) happens to equal one of the two
+    // known fill-loop entry addresses while the LOOP itself is executing from OUTSIDE that
+    // fill-loop's own code range — i.e. some unrelated routine's LOOP, using a stale r13 left
+    // over from this fill-loop's last "TO R13" many launches earlier, accidentally jumping in.
+    static const char* foreignEnv = std::getenv("SNESFOX_GSU_FOREIGN_LOOP_TRACE");
+    if (foreignEnv && !m_z && (m_r[13] == 0xB0C5 || m_r[13] == 0xB0DC)
+        && !(m_pbr == 0x01 && m_r[15] >= 0xB0A0 && m_r[15] <= 0xB0FF)) {
+        std::fprintf(stderr,
+            "[FOREIGN-LOOP] launch=%u from=$%02X:%04X -> r13=%04X r1=%04X r10=%04X r11=%04X r12=%04X\n",
+            m_launchCount, m_pbr, m_r[15], m_r[13], m_r[1], m_r[10], m_r[11], m_r[12]);
+        for (size_t i = 0; i < debugLogCount(); ++i) {
+            const DebugLogEntry& e = debugLogEntry(i);
+            std::fprintf(stderr, "  [%2zu] $%02X:%04X op=%02X alt1=%d alt2=%d opnd=%02X %02X\n",
+                i, e.pbr, e.pc, e.opcode, e.alt1 ? 1 : 0, e.alt2 ? 1 : 0, e.operand1, e.operand2);
+        }
+    }
+
     if (!m_z) {
         setR15(m_r[13]);
     }

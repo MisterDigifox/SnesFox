@@ -51,7 +51,72 @@ A bare `./snesfox` (no subcommand) only prints usage and exits 1 — always pass
 
 **Audio (`apu.hpp`/`.cpp`, `spc700.hpp`/`.cpp`, `sdsp.hpp`/`.cpp`)**: `APU` wraps a 64 KiB ARAM, the `Spc700` core (booting from the real IPL at `$FFC0`), and the `Sdsp` synthesizer (BRR decode, Gaussian mix, 8 voices → stereo PCM). Main-CPU `$2140`–`$2143` are the CPU→SPC latches, which the SPC sees as `$00F4`–`$00F7`; SPC writes to those same addresses are the SPC→CPU side read back at `$2140`–`$2143`. Scheduling between the two CPUs uses a coarse 12:7 cycle-carry ratio (SNES CPU clock vs the SMP's 1.024 MHz). Debug env vars: `SNESFOX_SPC_LOG=1` logs illegal opcodes/`STOP`; `SNESFOX_SPC_STRICT=1` halts on undefined opcodes instead of treating them as a 2-cycle NOP; `SNESFOX_APU_PORTS_ZERO=1` zeroes port latches at reset for ROMs that expect that before the IPL handshake.
 
-**GSU / Super FX (`gsu.hpp`/`.cpp`)**: a real, executing Super FX coprocessor core (~1200 lines, structurally ported from ares's `component/processor/gsu`+`sfc/coprocessor/superfx`) — register file, full instruction dispatch (`GSU::instruction()`), ROM/RAM buffer timing, pixel-plot cache, cache RAM, MMIO at `$3000-$34FF`. `Bus` bridges it in via `BusGsuHost` (`bus.cpp`): GSU work RAM lives at banks `$70`/`$71` (routed through the same `Bus::read`/`write` the main CPU sees), GSU's own ROM view goes through `Bus::gsuReadRom()` (LoROM half-bank formula for banks `$00-$3F`: `((addr&0x3F0000)>>1)|(addr&0x7FFF)` — each 64KB CPU bank mirrors the same 32KB ROM chunk into both halves; banks `$40-$5F` are a direct/linear mirror), and `Bus::stepPeripherals` calls `m_gsu.run()` every CPU step, clock-scaled by `$3039`'s CLSR bit (4x/8x). Debug env vars: `SNESFOX_GSU_TRACE=<N>` traces the first N GSU instructions executed while `SFR.GO` is set; `SNESFOX_GSU_IO=1` traces CPU-side `$3000-$303B` register access; `SNESFOX_CPU_TRACE=<N>` + `SNESFOX_CPU_TRACE_ALWAYS=1` traces main-CPU instructions unconditionally (without `_ALWAYS` it only fires while the GSU is running). See the `emulate-gsu-starfrog` skill (`.claude/skills/`) for the debugging methodology and known-fixed/remaining bugs found working against the `StarFrog/` fixture below.
+**GSU / Super FX (`gsu.hpp`/`.cpp`)**: a real, executing Super FX coprocessor core (~1200 lines, structurally ported from ares's `component/processor/gsu`+`sfc/coprocessor/superfx`) — register file, full instruction dispatch (`GSU::instruction()`), ROM/RAM buffer timing, pixel-plot cache, cache RAM, MMIO at `$3000-$34FF`. `Bus` bridges it in via `BusGsuHost` (`bus.cpp`): GSU work RAM lives at banks `$70`/`$71` (routed through the same `Bus::read`/`write` the main CPU sees), GSU's own ROM view goes through `Bus::gsuReadRom()` (LoROM half-bank formula for banks `$00-$3F`: `((addr&0x3F0000)>>1)|(addr&0x7FFF)` — each 64KB CPU bank mirrors the same 32KB ROM chunk into both halves; banks `$40-$5F` are a direct/linear mirror), and `Bus::stepPeripherals` calls `m_gsu.run()` every CPU step, clock-scaled by `$3039`'s CLSR bit (4x/8x). Debug env vars: `SNESFOX_GSU_TRACE=<N>` traces the first N GSU instructions executed while `SFR.GO` is set; `SNESFOX_GSU_IO=1` traces CPU-side `$3000-$303B` register access; `SNESFOX_GSU_RAM_WATCH=<hex>` or `<hexLo>-<hexHi>` logs every write landing in that GSU RAM (banks `$70`/`$71`) address range, the GSU-side counterpart of `bus.cpp`'s `SNESFOX_WRAM_WATCH` write-watchpoint for main-CPU WRAM; `SNESFOX_CPU_TRACE=<N>` + `SNESFOX_CPU_TRACE_ALWAYS=1` traces main-CPU instructions unconditionally (without `_ALWAYS` it only fires while the GSU is running).
+
+`mainStep()`'s r15 (PC) bookkeeping is a `m_r15Modified || m_r[15] != pcBefore` check, not just the flag alone: ares's register file is a `Register` wrapper whose `operator=` sets a `modified` bit on *every* write, so any ares instruction that happens to target r15 (via its `TO`/`WITH`-prefix destination machinery, not just literal jump/branch opcodes) is automatically tracked. `gsu.cpp` uses a raw `std::array<uint16_t,16>` instead, with `m_r15Modified` set manually at only a few call sites (`setR15`/`addR15`, `IWT`/`LM`/`SM` when n==15) — `insnLoad` (register-indirect `LDW (Rn)`, the mechanism real GSU code uses for a stack-based `mpop pc` return) was a real, previously-undiscovered gap: it never set the flag, so a freshly-popped return address silently got incremented by one on the next step, corrupting every such return. Comparing against `pcBefore` (already captured earlier in the same function for the trace/debug-log code) catches this class of bug generically instead of requiring an audit of every `dr()`-writing instruction. `GSU::tick()` similarly must decrement `m_romcl`/`m_ramcl` (the pending ROM/RAM buffer-commit countdowns) *independently*, each against the full `clocks` argument — ares's `SuperFX::step()` does this in parallel; an earlier version here spent `clocks` on the ROM branch first and only gave RAM whatever was left over, which could delay a same-tick RAM write's commit.
+
+See the `emulate-gsu-starfrog` skill (`.claude/skills/`) for the full debugging methodology, the known-fixed bug list above, and prior-session status (StarFox/StarFrog progress notes, the deleted `SNESFOX_GSU_NO_AC1D_HACK` band-aid, and the `mdo_3d_display`/`m_dlptr` clobber investigation) — **but read the "GSU pipeline prefetch bug" section immediately below first**, since it's a newer, more fundamental finding from 2026-08-19 that may substantially redirect or invalidate parts of that investigation.
+
+### ⚠️ IN PROGRESS (2026-08-19): real GSU prefetch-queue bug found via Star3D, fix incomplete — `gsu.cpp` currently has uncommitted, broken WIP changes
+
+**Symptom**: `Star3D/star3d.sfc` (the simplest possible Super FX ROM in this repo, see the
+`build-gsu-demo-star3d` skill) doesn't render at all — `./snesfox snap Star3D/star3d.sfc 300` shows
+`GSU: launches=1 stops=1 ... plotCount=0 lastSessionCycles=7 pc=$0x01:000B`, i.e. it stops after ~7
+GSU cycles having executed almost nothing.
+
+**Root cause, confirmed with high confidence**: a real bug in the single-byte instruction-prefetch
+queue (`GSU::peekpipe()`/`GSU::pipe()`/`m_pipeline`, `gsu.cpp`). Whenever a GSU instruction consumes
+operand bytes via `pipe()` (any `IWT`/`LMS`/`SMS`/`IBT`/branch), the **next** instruction's
+`peekpipe()` redundantly re-reads the exact ROM address that instruction's last `pipe()` call already
+fetched, instead of the genuinely-next byte. If the next instruction is itself multi-byte, its own
+*first operand* gets corrupted into a repeat of its own opcode byte (`IWT R7,#64` immediately after
+`IWT R3,#128` produces `r7=0x40F7`, not `0x0040` — confirmed via a minimal standalone repro, see
+below). If the next instruction is single-byte, it silently executes twice instead.
+
+This is **confirmed to be a real emulator bug, not a hardware quirk** `build.py` needs to route
+around (unlike the already-known branch delay-slot quirk): real, shipped Argonaut GSU source
+(`StarFox/SG_extracted/mdrawlis.mc:1258-1259`, `mobj.mc:319-320`, `mtxtprt.mc:146-147`,
+`mbumwipe.mc:173-174`, `mdsprite.mc:91-92`, `mgdots.mc:255-256`) has multiple strictly-adjacent
+`iwt`/`iwt` pairs with zero padding, in code that shipped and works on real hardware — that could not
+exist if this pattern were broken on real Super FX silicon.
+
+A line-by-line diff of `gsu.cpp`'s `pipe()`/`peekpipe()`/`readOpcode()` against
+`ares-ref/sfc/coprocessor/superfx/memory.cpp` found **no textual difference** — despite that, the bug
+reproduces 100% deterministically. **The exact reason gsu.cpp diverges from ares despite looking
+identical has not been found.** Treat prior-session StarFox findings that were only validated by
+self-consistency against the (already-buggy) running emulator — not against independently-known-good
+values — as suspect until re-checked after this is fixed (e.g. the `emulate-gsu-starfrog` skill's
+`mallrotzsort`/`$01:B189`/`r9=0xF2F9` conclusions from the same 2026-08-19 session).
+
+**Minimal deterministic repro** (works regardless of what precedes it):
+```
+CACHE (or NOP, or nothing)
+IWT R3, #0x0080
+IWT R7, #0x0040   <- corrupted: comes out as 0x40F7, not 0x0040
+STOP
+```
+
+**Current `gsu.cpp` state: mid-fix, confirmed still broken, do not trust.** A first attempt added
+`m_pipelineAddr`/`m_pipelineValid` members and rewrote `peekpipe()`/`pipe()` to skip the redundant
+refetch when `m_pipelineAddr == m_r[15]` — this is necessary but incomplete: when `peekpipe()` skips
+its refetch, it must still advance the fetch pointer to `ROM[m_pipelineAddr + 1]` (mirroring what
+`pipe()` does) instead of leaving `m_pipeline` holding the stale opcode byte, or a following `pipe()`
+call within the *same* instruction delivers that stale value as if it were a fresh operand — this is
+exactly the corruption that's still reproducing. Full analysis, the correct next design (decouple the
+fetch pointer entirely from `r15`, advance it by 1 unconditionally on every `pipe()`/`peekpipe()`
+call, resync it to `r15` only after an explicit jump or a fresh GSU launch), and the ordered resume
+checklist are in the local memory file `project_gsu_pipeline_bug_wip.md` (auto-memory, not in this
+repo — ask Claude to recall it, or see the equivalent write-up that should be added to the
+`emulate-gsu-starfrog` skill once the fix actually works). `selftest`/`release.sh` round-trip still
+pass with the WIP change (that pipeline path isn't exercised by the 65816-only fixture ROMs), but
+Star3D/StarFox were not retested against the incomplete fix.
+
+**Next steps, in order**: (1) finish the fetch-pointer redesign in `peekpipe()`/`pipe()`; (2) verify
+against the standalone repro harness (`iwt_test.cpp`, source in the memory file above, no ROM needed)
+until `r3`/`r7`/`r8` all come out correct; (3) re-run `selftest`/`release.sh`; (4) `./snesfox snap
+Star3D/star3d.sfc 300` and actually look at the rendered PPM (see `build-gsu-demo-star3d` skill) to
+confirm a real wireframe cube, not just nonzero `plotCount`; (5) if that works, re-run the StarFox
+`mallrotzsort` investigation from scratch, since this bug likely explains a lot of it.
 
 **DMA/HDMA (`dma.hpp`/`.cpp`)**: general-purpose DMA via `$420B` and per-scanline HDMA via `$420C` (direct and indirect table modes), called from `Bus::stepPeripherals` once per scanline — this is what drives effects like per-line scrolling in the `ParallaxScrolling.sfc` fixture and in `SplitScrolling.sfc` (built from the sibling untracked `SplitScrolling/` PVSnesLib source project, not committed as a prebuilt ROM — see `tests/ppu_test.cpp` for the window/OBJ-address regressions it originally caught). Both genuinely steal CPU cycles matching real hardware (`Dma::trigger`/`beginHdmaFrame`/`runHdmaForScanline` return the master-clock cost — 8 cycles/byte plus fixed overhead per the formulas in `ares-ref/sfc/cpu/dma.cpp` — which `CPU::step()`/`Bus` fold into both cycle counters above); this matters for any timing-sensitive polling loop running near a large DMA transfer, not just GSU titles.
 
