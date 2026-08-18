@@ -18,6 +18,7 @@ public:
     uint8_t  bgSC(int bg)    const { return m_bgSC[bg]; }   // tilemap base+size
     uint8_t  bgNBA12()       const { return m_bgNBA[0]; }   // BG1/2 CHR base
     uint8_t  bgNBA34()       const { return m_bgNBA[1]; }   // BG3/4 CHR base
+    uint16_t chrBase(int bg) const;                         // VRAM word address of bg's CHR/tileset base
     uint16_t bgHOFS(int bg)  const { return m_bgHOFS[bg]; }
     uint16_t bgVOFS(int bg)  const { return m_bgVOFS[bg]; }
     uint16_t mode7HOFS()     const { return m_m7hofs; }
@@ -207,7 +208,6 @@ private:
                               LayerPixel* bg2, LayerPixel* bg3,
                               SpritePixel* spr, bool mainScreen) const;
     uint16_t tilemapEntry(int bg, int tileCol, int tileRow) const;
-    uint16_t chrBase(int bg) const;
     uint8_t  getPixel(int bpp, uint16_t base, uint16_t tileNum, int row, int col) const;
     uint32_t cgramToArgb(uint16_t bgr555) const;
     uint32_t applyInidispLuma(uint32_t argb) const;

@@ -29,6 +29,12 @@ constexpr int kTileSheetRows = 128;
 constexpr int kTileSheetW = kTileSheetCols * 8; // 128
 constexpr int kTileSheetH = kTileSheetRows * 8; // 1024
 
+// GSU bitplane framebuffer as decoded from RAM ($70/$71): largest possible screen is
+// 256x256 (SCMR HT=3 / OBJ mode); smaller modes (128x128/160/192) are decoded into the
+// top-left corner of this same buffer and cropped for display.
+constexpr int kGsuRamMaxW = 256;
+constexpr int kGsuRamMaxH = 256;
+
 // SNES CGRAM: 16 palettes × 16 colors each (256 entries total).
 struct DebugPanel {
     std::vector<DebugSection> sections; // ROM, CPU Debug, PPU State — rendered in the left-side menu
@@ -40,6 +46,27 @@ struct DebugPanel {
     std::array<uint16_t, 4> bgTilemapBase{}; // VRAM word address of BG1-4's tilemap base ((BGxSC>>2)*0x400)
     std::array<uint16_t, 4> bgChrBase{};     // VRAM word address of BG1-4's tileset/CHR base (Ppu::chrBase)
     uint8_t bgMode = 0;                      // current BG mode (0-7), Ppu::bgMode()
+
+    // GSU Debugger panel — only meaningful when hasGsu is true.
+    bool hasGsu = false;
+    bool gsuRunning = false;
+    uint8_t gsuPbr = 0;
+    uint16_t gsuPcAddr = 0;      // address of the currently-executing opcode (already -1 adjusted)
+    std::string gsuCurrentInstr;
+    std::array<uint16_t, 16> gsuRegs{};
+    uint16_t gsuSfr = 0;
+    uint32_t gsuLaunches = 0;
+    uint32_t gsuStops = 0;
+    uint64_t gsuPlotCount = 0;
+    uint8_t gsuScbr = 0, gsuScmr = 0, gsuRombr = 0;
+    bool gsuRambr = false;
+    std::vector<std::string> gsuLog; // decoded instruction history, oldest first
+
+    // GSU RAM Viewer — decoded bitplane framebuffer at SCBR/RAMBR, cropped to gsuRamWidth/HeightPx.
+    std::array<uint32_t, kGsuRamMaxW * kGsuRamMaxH> gsuRamArgb{};
+    uint16_t gsuRamWidthPx = 0;
+    uint16_t gsuRamHeightPx = 0;
+    uint8_t gsuRamBpp = 0;
 };
 
 // Result of clicking a palette swatch and hitting Apply in the editor popup.
@@ -76,11 +103,13 @@ private:
     void drawRightPanel(const DebugPanel& panel);
     void drawBottomPanel(const DebugPanel& panel);
     void drawGameInfoPanel(const DebugPanel& panel);
+    void drawGsuDebugPanel(const DebugPanel& panel);
 
     SDL_Window*   m_window       = nullptr;
     SDL_Renderer* m_renderer     = nullptr;
     SDL_Texture*  m_frameTex     = nullptr; // 256×224 streaming texture
     SDL_Texture*  m_tileSheetTex = nullptr; // 128×1024 streaming texture for the Tiles Viewer (full VRAM)
+    SDL_Texture*  m_gsuRamTex    = nullptr; // 256×256 streaming texture for the GSU RAM Viewer
     int           m_windowWidth  = 0;
     int           m_windowHeight = 0;
 

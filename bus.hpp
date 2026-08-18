@@ -70,6 +70,9 @@ public:
 
     bool hasSuperFx() const { return m_hasSuperFx; }
     const GSU& gsu() const { return m_gsu; }
+    // Raw GSU work RAM (banks $70 0x00000-0x0FFFF, $71 0x10000-0x1FFFF), for the debug UI's
+    // GSU RAM Viewer — decodes whatever bitplane framebuffer the GSU last plotted into it.
+    const std::vector<uint8_t>& gsuWorkRam() const { return m_gsuRam; }
 
 private:
     const std::vector<uint8_t>& m_rom;
@@ -126,6 +129,7 @@ private:
 
     // DMA / HDMA ($420C write-only latch)
     uint8_t m_dmaTraceCount = 0;
+    uint16_t m_dmaVramWatchCount = 0; // separate cap for SNESFOX_DMA_VRAM_WATCH-filtered traces
     uint8_t m_reg420c       = 0;
 
     // MEMSEL ($420D) — bit0 selects FastROM (6-cycle) vs SlowROM (8-cycle) access

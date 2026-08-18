@@ -21,6 +21,7 @@
 #include "bus.hpp"
 #include "cpu.hpp"
 #include "display.hpp"
+#include "gsu_disasm.hpp"
 #include "disasm_dump.hpp"
 #include "header.hpp"
 #include "opcodes.hpp"
@@ -284,6 +285,60 @@ void decodeTileSheet(const uint16_t* vram, const uint16_t* cgram,
     }
 }
 
+// Decodes the GSU's current bitplane framebuffer (wherever SCBR/RAMBR currently points in the
+// $70/$71 work RAM) into an ARGB8888 image, cropped to the active screen mode's actual size.
+// Shares the exact tile-address (`cn`) and bit-plane-interleave formulas as GSU::rpix/
+// flushPixelCache (gsu.cpp) — this is a read-only re-derivation of the same hardware math,
+// not a new format.
+void decodeGsuRam(const GSU& gsu, const std::vector<uint8_t>& gsuRam, const uint16_t* cgram,
+                  std::array<uint32_t, kGsuRamMaxW * kGsuRamMaxH>& outArgb,
+                  uint16_t& outWidth, uint16_t& outHeight, uint8_t& outBpp) {
+    const uint8_t scmrRaw = gsu.scmr();
+    const uint8_t scmrHt = static_cast<uint8_t>((((scmrRaw >> 5) & 1) << 1) | ((scmrRaw >> 2) & 1));
+    const uint8_t scmrMd = static_cast<uint8_t>(scmrRaw & 0x03);
+    const bool porObj = gsu.porObj();
+    const uint8_t ht = porObj ? 3u : scmrHt;
+    // The cn/address formula itself has no width limit — "128 wide" is just the conventional
+    // non-OBJ screen width most games stay within, not something the hardware enforces. Games
+    // that plot past x=127 (real screen coordinates, not GSU-buffer-relative) are still valid;
+    // always show the full 256 so the viewer doesn't silently crop real content (confirmed via
+    // Star3D's own ground-truth vertex coordinates, which range up to x=172).
+    const uint16_t width = kGsuRamMaxW;
+    const uint16_t height = gsu.screenHeight();
+    const uint32_t bpp = 2u << (scmrMd - (scmrMd >> 1));
+    const uint32_t bankOffset = gsu.rambr() ? 0x10000u : 0u;
+    const uint32_t scbrBase = static_cast<uint32_t>(gsu.scbr()) << 10;
+
+    outWidth = width;
+    outHeight = height;
+    outBpp = static_cast<uint8_t>(bpp);
+    outArgb.fill(0xFF000000u);
+
+    auto readRam = [&](uint32_t addr) -> uint8_t {
+        return gsuRam[bankOffset + (addr & 0xFFFF)];
+    };
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            uint32_t cn = 0;
+            switch (ht) {
+            case 0: cn = static_cast<uint32_t>(((x & 0xF8) << 1) + ((y & 0xF8) >> 3)); break;
+            case 1: cn = static_cast<uint32_t>(((x & 0xF8) << 1) + ((x & 0xF8) >> 1) + ((y & 0xF8) >> 3)); break;
+            case 2: cn = static_cast<uint32_t>(((x & 0xF8) << 1) + (x & 0xF8) + ((y & 0xF8) >> 3)); break;
+            default: cn = static_cast<uint32_t>(((y & 0x80) << 2) + ((x & 0x80) << 1) + ((y & 0x78) << 1) + ((x & 0x78) >> 3)); break;
+            }
+            const uint32_t addrBase = scbrBase + cn * (bpp << 3) + static_cast<uint32_t>(y & 7) * 2;
+            const uint8_t shift = static_cast<uint8_t>((x & 7) ^ 7);
+            uint32_t colorIndex = 0;
+            for (uint32_t n = 0; n < bpp; ++n) {
+                const uint32_t byte = ((n >> 1) << 4) + (n & 1);
+                colorIndex |= ((readRam(addrBase + byte) >> shift) & 1u) << n;
+            }
+            outArgb[static_cast<size_t>(y * kGsuRamMaxW + x)] = bgr555ToArgb(cgram[colorIndex]);
+        }
+    }
+}
+
 uint16_t readResetVector(const std::vector<uint8_t>& rom, bool isLoRom) {
     const size_t addr = isLoRom ? 0x7FFC : 0xFFFC;
     if (rom.size() <= addr + 1) return 0x0000;
@@ -314,6 +369,7 @@ DebugPanel makeDebugPanel(
     const std::vector<std::string>& headerLines,
     const CPU& cpu,
     const Ppu& ppu,
+    const Bus& bus,
     const std::deque<std::string>& instructionLog,
     bool paused
 ) {
@@ -401,6 +457,44 @@ DebugPanel makeDebugPanel(
     decodeTileSheet(ppu.vram(), ppu.cgram(), panel.tileSheetArgb);
 
     panel.instructionLog.assign(instructionLog.begin(), instructionLog.end());
+
+    panel.hasGsu = bus.hasSuperFx();
+    if (panel.hasGsu) {
+        const GSU& gsu = bus.gsu();
+        panel.gsuRunning = gsu.running();
+        panel.gsuPbr = gsu.pbr();
+        panel.gsuSfr = gsu.sfr();
+        panel.gsuLaunches = gsu.launchCount();
+        panel.gsuStops = gsu.stopCount();
+        panel.gsuPlotCount = gsu.plotCount();
+        panel.gsuScbr = gsu.scbr();
+        panel.gsuScmr = gsu.scmr();
+        panel.gsuRombr = gsu.rombr();
+        panel.gsuRambr = gsu.rambr();
+        for (int i = 0; i < 16; ++i) panel.gsuRegs[i] = gsu.reg(static_cast<uint8_t>(i));
+
+        decodeGsuRam(gsu, bus.gsuWorkRam(), ppu.cgram(), panel.gsuRamArgb,
+                     panel.gsuRamWidthPx, panel.gsuRamHeightPx, panel.gsuRamBpp);
+
+        const size_t logCount = gsu.debugLogCount();
+        panel.gsuLog.clear();
+        panel.gsuLog.reserve(logCount);
+        for (size_t i = 0; i < logCount; ++i) {
+            const GSU::DebugLogEntry& e = gsu.debugLogEntry(i);
+            const uint16_t opcodeAddr = static_cast<uint16_t>(e.pc - 1);
+            const std::string instr = gsuDisassemble(opcodeAddr, e.opcode, e.alt1, e.alt2,
+                                                       e.operand1, e.operand2);
+            std::ostringstream oss;
+            oss << "$" << hex8(e.pbr) << ":" << std::uppercase << std::hex << std::setw(4)
+                << std::setfill('0') << opcodeAddr << "  " << instr;
+            panel.gsuLog.push_back(oss.str());
+            if (i + 1 == logCount) {
+                panel.gsuPcAddr = opcodeAddr;
+                panel.gsuCurrentInstr = instr;
+            }
+        }
+    }
+
     return panel;
 }
 
@@ -517,6 +611,25 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
                   << " rms=" << std::sqrt(audioSumSq / static_cast<double>(audioTotal)) << "\n";
     }
 
+    if (const char* dumpPath = std::getenv("SNESFOX_GSU_RAM_DUMP")) {
+        std::ofstream f(dumpPath, std::ios::binary);
+        const auto& ram = bus.gsuWorkRam();
+        f.write(reinterpret_cast<const char*>(ram.data()), static_cast<std::streamsize>(ram.size()));
+    }
+    if (const char* decodedPath = std::getenv("SNESFOX_GSU_RAM_DECODED_DUMP")) {
+        // Exercises the REAL decodeGsuRam (not a reimplementation) and dumps its actual output,
+        // for pixel-for-pixel comparison against an independent reference decode.
+        DebugPanel tmpPanel;
+        decodeGsuRam(bus.gsu(), bus.gsuWorkRam(), bus.ppu().cgram(), tmpPanel.gsuRamArgb,
+                     tmpPanel.gsuRamWidthPx, tmpPanel.gsuRamHeightPx, tmpPanel.gsuRamBpp);
+        std::ofstream f(decodedPath, std::ios::binary);
+        uint16_t hdr[3] = {tmpPanel.gsuRamWidthPx, tmpPanel.gsuRamHeightPx,
+                           static_cast<uint16_t>(tmpPanel.gsuRamBpp)};
+        f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+        f.write(reinterpret_cast<const char*>(tmpPanel.gsuRamArgb.data()),
+                static_cast<std::streamsize>(tmpPanel.gsuRamArgb.size() * sizeof(uint32_t)));
+    }
+
     const Ppu& p = bus.ppu();
     const uint16_t* v = p.vram();
     const uint8_t nba34 = p.bgNBA34();
@@ -587,7 +700,7 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
                   << " lastSessionCycles=" << g.lastSessionCycles()
                   << " pc=$" << hex8(g.pbr()) << ":" << hexW(g.pc())
                   << " scbr=$" << hex8(g.scbr()) << " scmr=$" << hex8(g.scmr())
-                  << " rombr=$" << hex8(g.rombr()) << '\n';
+                  << " rombr=$" << hex8(g.rombr()) << " rambr=" << (g.rambr() ? 1 : 0) << '\n';
     }
 
     {
@@ -645,7 +758,28 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
         for (int i = 0; i < 8; ++i) std::cerr << hexW(v[(tmBase + static_cast<uint16_t>(i)) & 0x7FFF]) << ' ';
         std::cerr << "  around(32,88)[tile col4 row11]: ";
         const int tc = 32/8, tr = 88/8;
-        std::cerr << hexW(v[(tmBase + static_cast<uint16_t>(tr*32+tc)) & 0x7FFF]) << '\n';
+        const uint16_t mapWord = v[(tmBase + static_cast<uint16_t>(tr*32+tc)) & 0x7FFF];
+        std::cerr << hexW(mapWord) << '\n';
+
+        const uint16_t chrBaseBg = p.chrBase(bg);
+        unsigned chrNzBg = 0;
+        for (int i = 0; i < 4096; ++i) if (v[(chrBaseBg + static_cast<uint16_t>(i)) & 0x7FFF]) ++chrNzBg;
+        std::cerr << "  BG" << (bg+1) << " CHR@$" << hexW(chrBaseBg) << " nonzero=" << chrNzBg
+                  << "/4096 first16: ";
+        for (int i = 0; i < 16; ++i) std::cerr << hexW(v[(chrBaseBg + static_cast<uint16_t>(i)) & 0x7FFF]) << ' ';
+        std::cerr << '\n';
+
+        // What does the SPECIFIC tile referenced by that sampled tilemap entry actually look
+        // like at each BG's own CHR base? (bg0=BG1 $210B lo, bg1=BG2 $210B hi, bg2=BG3 $210C lo)
+        const unsigned tileIdx = mapWord & 0x3FF;
+        std::cerr << "  tile#" << tileIdx << " (from BG" << (bg+1) << " map) 4bpp data at each CHR base:\n";
+        for (int cb = 0; cb < 3; ++cb) {
+            const uint16_t base = p.chrBase(cb);
+            const uint16_t off = static_cast<uint16_t>(base + tileIdx * 16u);
+            std::cerr << "    @BG" << (cb+1) << "base($" << hexW(base) << ")+tile*16=$" << hexW(off) << ": ";
+            for (int i = 0; i < 8; ++i) std::cerr << hexW(v[(off + static_cast<uint16_t>(i)) & 0x7FFF]) << ' ';
+            std::cerr << '\n';
+        }
     }
     const uint8_t* oam = p.oam();
     for (int i = 0; i < 8; ++i) {
@@ -853,7 +987,7 @@ int runEmu(const std::string& initialRomPath) {
                 }
             }
 
-            const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), instructionLog, paused);
+            const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), bus, instructionLog, paused);
             const PaletteEdit paletteEdit = display.presentWithFrame(bus.ppu().framebuffer(), panel);
             if (paletteEdit.applied) {
                 bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);

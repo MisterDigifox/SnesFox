@@ -59,12 +59,40 @@ A bare `./snesfox` (no subcommand) only prints usage and exits 1 — always pass
 
 **Disasm/reasm (`disasm_dump.hpp`/`.cpp`, `reasm.hpp`/`.cpp`)**: `dumpRomAsAsmFull` walks the ROM recursively from the reset vector, auto-labels code, and dumps unreached bytes as `.db`; it can annotate lines with `; cov` from a `cov`-produced coverage file (stripped back out by `reasm`, so annotated dumps still round-trip). `reassembleDumpAsmToRom(File)` is a from-scratch mini-assembler for exactly the dialect `disasm_dump` emits — it is not a general-purpose 65816 assembler.
 
-**Debug UI (`display.hpp`/`.cpp`)**: Dear ImGui (vendored under `imgui/`+`imgui/backends/`, SDL2 renderer backend) rather than a raw SDL2 text panel — `applyModernDarkTheme()` sets a custom dark/rounded theme. Layout: a left panel with ROM/CPU/PPU state, an instruction log, and a Pause/Resume/Step/Next-Frame/Reset toolbar (`drawControls()`); the scaled 256×224 framebuffer centered; a right panel rendering all 16 CGRAM palettes as clickable swatch grids with a popup RGB color editor that writes live via `Bus::ppu().setCgramEntry()` (wired in `snesfox_app.cpp`); and a bottom full-VRAM Tiles Viewer with hover tooltips showing tile index and VRAM address. `Display::wantsKeyboardCapture()` suppresses the emulated joypad while an ImGui widget (e.g. the palette editor's text fields) has focus.
+**Debug UI (`display.hpp`/`.cpp`)**: Dear ImGui (vendored under `imgui/`+`imgui/backends/`, SDL2 renderer backend) rather than a raw SDL2 text panel — `applyModernDarkTheme()` sets a custom dark/rounded theme. Layout: a left panel with ROM/CPU/PPU state, an instruction log, and a Pause/Resume/Step/Next-Frame/Reset toolbar (`drawControls()`); the scaled 256×224 framebuffer centered; a right panel rendering all 16 CGRAM palettes as clickable swatch grids with a popup RGB color editor that writes live via `Bus::ppu().setCgramEntry()` (wired in `snesfox_app.cpp`); and a bottom full-VRAM Tiles Viewer with hover tooltips showing tile index and VRAM address. Directly below the Tiles Viewer, a GSU RAM Viewer (only shown when `panel.hasGsu`) decodes whatever bitplane framebuffer the Super FX chip last plotted into its work RAM ($70/$71) at the current SCBR/RAMBR/SCMR — `decodeGsuRam()` (`snesfox_app.cpp`) re-derives the exact same tile-address (`cn`) and bit-plane-interleave formulas as `GSU::rpix`/`flushPixelCache` (`gsu.cpp`) via `Bus::gsuWorkRam()` and `GSU::scbr()`/`rambr()`/`scmr()`/`porObj()`/`screenHeight()`, cropping the decoded 256×256 buffer down to the active screen mode's real size (128×128/160/192, or 256×256 in OBJ mode); hovering shows pixel coords plus the SCBR/RAMBR/bpp that produced them. `Display::wantsKeyboardCapture()` suppresses the emulated joypad while an ImGui widget (e.g. the palette editor's text fields) has focus.
 
 ## Fixture ROMs
 
 The root directory holds prebuilt `.sfc` test ROMs (mostly PVSnesLib demos: `Mode0`/`Mode1`/`Mode7`/`Mode7Affine`/`Mode7Perspective`/`ParallaxScrolling`/`Transparency`/`AnimatedSprite`/`Logo*`/`hello_world`/`music`) used as fixtures when developing/checking specific PPU, DMA, or APU features. `music.sfc` and `SplitScrolling.sfc` are each built from a sibling PVSnesLib source project (`music/`, `SplitScrolling/` — both untracked, containing their own `Makefile`+`src/`); `SplitScrolling.sfc` itself isn't committed, so rebuild it from `SplitScrolling/` (`make`, requires `PVSNESLIB_HOME`) before relying on it — it's a DBZ Super Butouden 1 battle-screen romhack used to regression-test HDMA windowing and OBJ name-base addressing (see `tests/ppu_test.cpp`). `tools/check_bg3_chr.py` (invoked from `check.sh`) is a read-only heuristic check against `Mode1BG3HighPriority.sfc`; `tools/gen_apu_opcodes_cpp.py` generates SPC700 opcode-table rows from the Sony SPC700 manual text.
 
 `StarFrog/` (sibling directory, untracked) is a real Super FX game — the leaked/renamed Star Fox source (see `StarFrog/CLAUDE.md`), buildable via its own DOSBox-era toolchain into `StarFrog/starfrog.sfc`, which *is* checked in and ready to use as the GSU core's real-world regression target without rebuilding. This particular checkout has been edited to boot straight into its title screen and stay there forever (every other screen is unreachable) — see the `emulate-gsu-starfrog` skill for how to use it.
+
+`StarFox/` (sibling directory, untracked, own nested git repo) is the leaked
+Argonaut source for the **complete, unmodified** Star Fox — a broader fixture
+than `StarFrog/` above (see the `emulate-gsu-starfox` skill for how they
+differ and when to use which). Buildable via `StarFox/build.sh` (DOSBox-X)
+into `StarFox/starfox.sfc`, which is checked in and ready to use. Inside
+`StarFox/SG_extracted/` (git-tracked, human-readable source extraction):
+**`bank1.asm` is the entire GSU program** — everything else in the tree is
+65816 main-CPU code. A `bank 1`/`bankend 1` block wraps a `mario on`/
+`mario off` toggle (Argonaut's `SASMX` assembler directive that switches from
+65816 to GSU instruction encoding) which `incfile`s ~20 `.mc` files in a
+fixed order (`mvars.mc`, `mmacs.mc`, `mshtab.mc`, `mmaths.mc`, `mwrot.mc`,
+`mwcrot.mc`, `mobj.mc`, `mclip.mc`, `mdrawc.mc`, `mdrawp.mc`, `msprite.mc`,
+`mgdots.mc`, `mcircle.mc`, `mdrawlis.mc`, `mdecru.mc`, `mtxtprt.mc`,
+`mplanet.mc`, `mdsprite.mc`, `mpart.mc`, `mbumwipe.mc`, `mhud.mc`) — this is
+the entire shared GSU microcode program (used for both gameplay and the
+title screen), assembling into ROM bank `$01`, which matches exactly what
+`snesfox`'s own GSU core reports at runtime (`GSU: ... pc=$0x01:xxxx`,
+`PBR=$01` in `./snesfox snap`) — an independent cross-check that the
+emulator's bank/PBR handling lands in the right place. The SPC700 side is
+the opposite: there is **no readable SPC700 assembly anywhere in this leak**
+— `sound.asm` is only the 65816-side driver (`bootapu #snd_title`/
+`#snd_map`/etc., uploading a numbered blob into ARAM and booting it); the
+actual SPC700 machine code (sound-engine driver plus song/sample data,
+combined) is opaque binary in `snd/*.bin` (one file per song/sound-bank),
+pulled in via `incbins.asm` — Argonaut evidently built the sound engine with
+a separate tool and just linked the compiled result in, so unlike the GSU
+program there's nothing to cross-reference here against source.
 
 `ares-ref/` (untracked) holds real vendored reference source from the [ares](https://ares-emulator.net/) emulator — `component/processor/gsu/` and `sfc/coprocessor/superfx/` (the GSU core) plus `sfc/cpu/` (65816 core, including DMA/HDMA timing) — pulled in to diff `gsu.cpp`/`dma.cpp`/`cpu.cpp` against ground truth rather than relying on memory of the ISA/timing rules; see the `emulate-gsu-starfrog` skill for the fetch script if more of it is needed (raw.githubusercontent.com is rate-limited in this environment — use the GitHub git-blob API instead). `third_party/gme/` and `docs/` are empty and unreferenced by any build or source file. `preview/preview.png` is the only one actually used — it's the screenshot embedded in `README.md`.

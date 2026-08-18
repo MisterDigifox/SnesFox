@@ -46,6 +46,9 @@ void GSU::reset() {
     m_pixelCache[1].offset = 0xFFFF;
 
     m_pipeline = 0x01; // NOP — matches ares; 0x00 would execute STOP on first fetch
+    m_debugLog.fill(DebugLogEntry{});
+    m_debugLogPos = 0;
+    m_debugLogCount = 0;
     m_ramaddr = 0;
     m_cbr = 0;
     m_pbr = 0;
@@ -152,11 +155,56 @@ void GSU::mainStep(GsuHost& host) {
     const uint8_t pbrBefore = m_pbr;
     const uint8_t opcode = peekpipe(host);
 
+    {
+        DebugLogEntry entry;
+        entry.pbr = pbrBefore;
+        entry.pc = pcBefore;
+        entry.opcode = opcode;
+        entry.alt1 = m_alt1;
+        entry.alt2 = m_alt2;
+        entry.operand1 = host.readRom((static_cast<uint32_t>(pbrBefore) << 16) | pcBefore);
+        entry.operand2 = host.readRom((static_cast<uint32_t>(pbrBefore) << 16) | static_cast<uint16_t>(pcBefore + 1));
+        m_debugLog[m_debugLogPos] = entry;
+        m_debugLogPos = (m_debugLogPos + 1) % kDebugLogSize;
+        if (m_debugLogCount < kDebugLogSize) ++m_debugLogCount;
+    }
+
     static int traceLeft = std::getenv("SNESFOX_GSU_TRACE") ? std::atoi(std::getenv("SNESFOX_GSU_TRACE")) : 0;
     if (traceLeft > 0) {
         --traceLeft;
         std::fprintf(stderr, "[GSU %02X:%04X] op=%02X r1=%04X r2=%04X r14=%04X sfr=%04X\n",
                      pbrBefore, pcBefore, opcode, m_r[1], m_r[2], m_r[14], sfrRead());
+    }
+
+    // Only starts tracing once PC actually enters [lo,hi] — avoids paying for every earlier
+    // launch just to reach one specific hot loop. SNESFOX_GSU_RANGE_TRACE=lo-hi[:count]
+    static const char* rangeEnv = std::getenv("SNESFOX_GSU_RANGE_TRACE");
+    static uint16_t rangeLo = 0, rangeHi = 0;
+    static int rangeCount = 2000;
+    static bool rangeParsed = false;
+    static int rangeLeft = -1;
+    if (rangeEnv && !rangeParsed) {
+        rangeParsed = true;
+        unsigned lo = 0, hi = 0, cnt = 2000;
+        if (std::sscanf(rangeEnv, "%x-%x:%d", &lo, &hi, &cnt) >= 2) {
+            rangeLo = static_cast<uint16_t>(lo);
+            rangeHi = static_cast<uint16_t>(hi);
+            rangeCount = cnt;
+        }
+    }
+    const bool inRange = rangeEnv && pcBefore >= rangeLo && pcBefore <= rangeHi;
+    if (inRange && rangeLeft < 0) {
+        rangeLeft = rangeCount;
+    }
+    // Once triggered, log every instruction gap-free (not just while inside [lo,hi]) so a call
+    // out of the window doesn't look like a direct jump to whatever address is logged next.
+    if (rangeLeft > 0) {
+        --rangeLeft;
+        std::fprintf(stderr,
+            "[RNG %02X:%04X] op=%02X r0=%04X r1=%04X r2=%04X r3=%04X r7=%04X r9=%04X r11=%04X "
+            "sreg=%u dreg=%u ramaddr=%04X sfr=%04X\n",
+            pbrBefore, pcBefore, opcode, m_r[0], m_r[1], m_r[2], m_r[3], m_r[7], m_r[9], m_r[11],
+            m_sreg & 0xF, m_dreg & 0xF, m_ramaddr, sfrRead());
     }
 
     instruction(opcode, host);
@@ -167,7 +215,8 @@ void GSU::mainStep(GsuHost& host) {
         updateRomBuffer();
     }
 
-    if (m_go && m_launchRombr == 0 && m_lastLaunchR15 == 0xAC1D && m_sessionCycles > 250000) {
+    static const bool noAc1dHack = std::getenv("SNESFOX_GSU_NO_AC1D_HACK") != nullptr;
+    if (!noAc1dHack && m_go && m_launchRombr == 0 && m_lastLaunchR15 == 0xAC1D && m_sessionCycles > 250000) {
         m_irq = true;
         if (m_cfgrIrq) {
             host.onGsuIrq();
@@ -265,9 +314,13 @@ uint8_t GSU::readOpcode(GsuHost& host, uint16_t address) {
         return readRom(host, (static_cast<uint32_t>(m_pbr) << 16) | address);
     }
 
+    // Executing code out of GSU RAM ($60-7F bank range): the fetch bank is PBR itself
+    // (whichever RAM bank the code lives in), NOT RAMBR — RAMBR only selects the bank for
+    // LOAD/STORE data access, a separate, unrelated register (ares memory.cpp:readOpcode).
     syncRamBuffer(host);
     tick(m_clsr ? 5u : 6u, host);
-    return readRam(host, address);
+    if (!m_scmrRan) return 0x00;
+    return host.read(m_pbr, address);
 }
 
 void GSU::flushCache() {
@@ -433,7 +486,7 @@ void GSU::sfrWriteLow(GsuHost& host, uint8_t value) {
         m_cbr = 0;
         flushCache();
     } else if (!wasGo && m_go) {
-        onLaunch();
+        onLaunch(host);
     }
 }
 
@@ -452,7 +505,7 @@ void GSU::sfrWriteHigh(GsuHost& host, uint8_t value) {
     m_irq = (merged & kSfrIrq) != 0;
 
     if (!wasGo && m_go) {
-        onLaunch();
+        onLaunch(host);
     } else if (wasGo && !m_go) {
         m_cbr = 0;
         flushCache();
@@ -460,6 +513,13 @@ void GSU::sfrWriteHigh(GsuHost& host, uint8_t value) {
 }
 
 void GSU::parseScmr(uint8_t value) {
+    static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+    if (traceMode && value != m_scmrRaw) {
+        std::fprintf(stderr, "[MODE] pc=$%02X:%04X SCMR %02X->%02X (md=%u ht=%u) scbr=%02X rambr=%d\n",
+                     m_pbr, m_r[15], m_scmrRaw, value, value & 0x03,
+                     static_cast<unsigned>((((value >> 5) & 1) << 1) | ((value >> 2) & 1)),
+                     m_scbr, m_rambr ? 1 : 0);
+    }
     m_scmrRaw = value;
     m_scmrHt = static_cast<uint8_t>((((value >> 5) & 1) << 1) | ((value >> 2) & 1));
     m_scmrRon = (value & 0x10) != 0;
@@ -469,7 +529,13 @@ void GSU::parseScmr(uint8_t value) {
 }
 
 void GSU::parsePor(uint8_t value) {
-    m_porObj = (value & 0x10) != 0;
+    static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+    const bool newObj = (value & 0x10) != 0;
+    if (traceMode && newObj != m_porObj) {
+        std::fprintf(stderr, "[MODE] pc=$%02X:%04X POR.obj %d->%d scbr=%02X rambr=%d\n",
+                     m_pbr, m_r[15], m_porObj ? 1 : 0, newObj ? 1 : 0, m_scbr, m_rambr ? 1 : 0);
+    }
+    m_porObj = newObj;
     m_porFreezeHigh = (value & 0x08) != 0;
     m_porHighNibble = (value & 0x04) != 0;
     m_porDither = (value & 0x02) != 0;
@@ -508,10 +574,10 @@ uint8_t GSU::porRaw() const {
 void GSU::launch(GsuHost& host) {
     if (m_go) return;
     m_go = true;
-    onLaunch();
+    onLaunch(host);
 }
 
-void GSU::onLaunch() {
+void GSU::onLaunch(GsuHost& host) {
     ++m_launchCount;
     m_lastLaunchR15 = m_r[15];
     m_launchRombr = m_rombr;
@@ -525,6 +591,34 @@ void GSU::onLaunch() {
         std::fprintf(stderr,
             "[GSU launch #%u] R15=$%02X:%04X PBR=%02X ROMBR=%02X SCBR=%02X SCMR=%02X\n",
             m_launchCount, m_pbr, m_r[15], m_pbr, m_rombr, m_scbr, m_scmrRaw);
+    }
+    static const bool launchTrace = std::getenv("SNESFOX_GSU_LAUNCH_TRACE") != nullptr;
+    if (launchTrace) {
+        std::fprintf(stderr,
+            "[GSU launch #%u] R15=$%02X:%04X ROMBR=%02X SCBR=%02X SCMR=%02X RAMBR=%d RAN=%d RON=%d\n",
+            m_launchCount, m_pbr, m_r[15], m_rombr, m_scbr, m_scmrRaw,
+            m_rambr ? 1 : 0, m_scmrRan ? 1 : 0, m_scmrRon ? 1 : 0);
+    }
+
+    // Targeted dump for StarFox's mdo_3d_display ($AC1D) — dumps the world rotation matrix,
+    // RNG seed, and dust-loop state right at launch, to check for a degenerate matrix causing
+    // mshowdust's out-of-range retry loop (.ov1/.ov2/.ov3 in mgdots.mc) to never resolve.
+    static const bool dustTrace = std::getenv("SNESFOX_GSU_DUST_TRACE") != nullptr;
+    if (dustTrace && m_r[15] == 0xAC1D) {
+        auto rd16 = [&](uint16_t addr) -> int16_t {
+            const uint8_t lo = host.read(0x70, addr);
+            const uint8_t hi = host.read(0x70, static_cast<uint16_t>(addr + 1));
+            return static_cast<int16_t>(static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8));
+        };
+        std::fprintf(stderr,
+            "[GSU dust @launch #%u] wmat11=%d wmat12=%d wmat13=%d wmat21=%d wmat22=%d wmat23=%d "
+            "wmat31=%d wmat32=%d wmat33=%d rand=%d cnt=%d dotsorstars=%d viewpos=(%d,%d,%d)\n",
+            m_launchCount,
+            rd16(0x00D2), rd16(0x00D4), rd16(0x00D6),
+            rd16(0x00D8), rd16(0x00DA), rd16(0x00DC),
+            rd16(0x00DE), rd16(0x00E0), rd16(0x00E2),
+            rd16(0x0140), rd16(0x0040), rd16(0x019E),
+            rd16(0x00C6), rd16(0x00C8), rd16(0x00CA));
     }
 }
 
@@ -560,8 +654,12 @@ uint8_t GSU::color(uint8_t source) const {
 }
 
 void GSU::plot(GsuHost& host, uint8_t x, uint8_t y) {
-    if (static_cast<unsigned>(y) >= static_cast<unsigned>(m_screenHeight)) {
-        return;
+    static int plotTraceLeft = std::getenv("SNESFOX_GSU_PLOT_TRACE")
+        ? std::atoi(std::getenv("SNESFOX_GSU_PLOT_TRACE")) : 0;
+    if (plotTraceLeft > 0) {
+        --plotTraceLeft;
+        std::fprintf(stderr, "[PLOT] pc=$%02X:%04X x=%3u y=%3u colr=%02X scbr=%02X\n",
+                     m_pbr, m_r[15], x, y, m_colr, m_scbr);
     }
     if (!m_porTransparent) {
         if (m_scmrMd == 3) {
@@ -603,9 +701,6 @@ void GSU::plot(GsuHost& host, uint8_t x, uint8_t y) {
 }
 
 uint8_t GSU::rpix(GsuHost& host, uint8_t x, uint8_t y) {
-    if (static_cast<unsigned>(y) >= static_cast<unsigned>(m_screenHeight)) {
-        return 0;
-    }
     flushPixelCache(host, m_pixelCache[1]);
     flushPixelCache(host, m_pixelCache[0]);
 
@@ -1060,7 +1155,13 @@ void GSU::insnGETC_RAMB_ROMB(GsuHost& host) {
         m_colr = color(readRomBuffer(host));
     } else if (!m_alt1) {
         syncRamBuffer(host);
-        m_rambr = (sr() & 0x01) != 0;
+        static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+        const bool newRambr = (sr() & 0x01) != 0;
+        if (traceMode && newRambr != m_rambr) {
+            std::fprintf(stderr, "[MODE] pc=$%02X:%04X RAMBR %d->%d scbr=%02X\n",
+                         m_pbr, m_r[15], m_rambr ? 1 : 0, newRambr ? 1 : 0, m_scbr);
+        }
+        m_rambr = newRambr;
     } else {
         syncRomBuffer(host);
         const uint8_t bank = static_cast<uint8_t>(sr() & 0x7F);
@@ -1193,9 +1294,14 @@ void GSU::writeRegister(GsuHost& host, uint16_t addr, uint8_t value) {
     case 0x3037:
         parseCfgr(value);
         return;
-    case 0x3038:
+    case 0x3038: {
+        static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+        if (traceMode && value != m_scbr) {
+            std::fprintf(stderr, "[MODE] pc=$%02X:%04X SCBR %02X->%02X\n", m_pbr, m_r[15], m_scbr, value);
+        }
         m_scbr = value;
         return;
+    }
     case 0x3039:
         m_clsr = (value & 0x01) != 0;
         return;

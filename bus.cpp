@@ -485,6 +485,7 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     // ------------------------------------------------------------
     if (m_hasSuperFx) {
         if (bank == 0x70 || bank == 0x71) {
+            debugWramWatch(bank, addr, value);
             m_gsuRam[(static_cast<size_t>(bank - 0x70) << 16) | addr] = value;
             return;
         }
@@ -576,11 +577,23 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     // ------------------------------------------------------------
     if (addr == 0x420B) {
         if (value) {
-            // One-time trace of each unique $420B call (up to 16 calls total)
-            if (m_dmaTraceCount < 16) {
+            // Optional: also trace any DMA whose VMADD lands in a specific VRAM word range,
+            // regardless of how many $420B calls have already happened (SNESFOX_DMA_VRAM_WATCH=lo-hi).
+            static const char* vramWatchEnv = std::getenv("SNESFOX_DMA_VRAM_WATCH");
+            bool vramWatchHit = false;
+            if (vramWatchEnv) {
+                unsigned lo = 0, hi = 0;
+                if (std::sscanf(vramWatchEnv, "%x-%x", &lo, &hi) == 2 || (std::sscanf(vramWatchEnv, "%x", &lo) == 1 && (hi = lo, true))) {
+                    const unsigned vmadd = m_ppu.vramAddr();
+                    vramWatchHit = vmadd >= lo && vmadd <= hi && m_dmaVramWatchCount < 60;
+                }
+            }
+            // One-time trace of each unique $420B call (up to 16 calls total), plus any VRAM-watch hit
+            if (m_dmaTraceCount < 16 || vramWatchHit) {
                 ++m_dmaTraceCount;
-                std::fprintf(stderr, "[DMA#%u] $420B=$%02X  VMAIN=$%02X  VMADD=$%04X  VWr=%u\n",
-                    m_dmaTraceCount, value,
+                if (vramWatchHit) ++m_dmaVramWatchCount;
+                std::fprintf(stderr, "[DMA#%u]%s $420B=$%02X  VMAIN=$%02X  VMADD=$%04X  VWr=%u\n",
+                    m_dmaTraceCount, vramWatchHit ? " [VRAM-WATCH]" : "", value,
                     m_ppu.vmain(), m_ppu.vramAddr(), m_ppu.vramWrites());
                 for (int ch = 0; ch < 8; ++ch) {
                     if (!(value & (1 << ch))) continue;

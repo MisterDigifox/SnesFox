@@ -47,6 +47,8 @@ public:
     uint8_t scbr() const { return m_scbr; }
     uint8_t scmr() const { return m_scmrRaw; }
     uint8_t rombr() const { return m_rombr; }
+    bool    rambr() const { return m_rambr; }
+    bool    porObj() const { return m_porObj; }
     uint16_t ramaddr() const { return m_ramaddr; }
     uint16_t sessionMinRamAddr() const { return m_sessionMinRamAddr; }
     uint16_t sessionMaxRamAddr() const { return m_sessionMaxRamAddr; }
@@ -54,6 +56,32 @@ public:
     uint16_t pc() const { return m_r[15]; }
     uint16_t reg(uint8_t index) const { return m_r[index & 0x0F]; }
     void clearFlags();
+    bool alt1() const { return m_alt1; }
+    bool alt2() const { return m_alt2; }
+    uint16_t sfr() const { return sfrRead(); }
+
+    // Debug-only rolling log of executed instructions (for the "GSU Debugger" UI panel) — filled
+    // every step while SFR.GO is set, oldest entries overwritten once full. `pc` is the value of
+    // r15 immediately after the opcode byte was fetched (matching the real pipelined-fetch
+    // convention: the opcode's own address is `pc-1`); `operand1`/`operand2` are peeked directly
+    // from ROM (no side effects) so a UI can disassemble without re-deriving fetch timing.
+    struct DebugLogEntry {
+        uint8_t pbr = 0;
+        uint16_t pc = 0;
+        uint8_t opcode = 0;
+        bool alt1 = false;
+        bool alt2 = false;
+        uint8_t operand1 = 0;
+        uint8_t operand2 = 0;
+    };
+    static constexpr size_t kDebugLogSize = 48;
+    size_t debugLogCount() const { return m_debugLogCount; }
+    // index 0 = oldest retained entry, debugLogCount()-1 = most recently executed.
+    const DebugLogEntry& debugLogEntry(size_t index) const {
+        const size_t start = m_debugLogCount < kDebugLogSize
+            ? 0 : (m_debugLogPos + kDebugLogSize - m_debugLogCount) % kDebugLogSize;
+        return m_debugLog[(start + index) % kDebugLogSize];
+    }
 
     static void setTrace(bool enabled) { s_trace = enabled; }
     static bool traceEnabled() { return s_trace; }
@@ -116,7 +144,7 @@ private:
     void parseCfgr(uint8_t value);
     void updateScreenHeight();
 
-    void onLaunch();
+    void onLaunch(GsuHost& host);
     void onStop(uint16_t stopPc, GsuHost& host);
 
     // Instruction handlers (ares/component/processor/gsu/instructions.cpp)
@@ -204,6 +232,10 @@ private:
     bool m_b = false;
     bool m_alt1 = false;
     bool m_alt2 = false;
+
+    std::array<DebugLogEntry, kDebugLogSize> m_debugLog{};
+    size_t m_debugLogPos = 0;
+    size_t m_debugLogCount = 0;
     bool m_z = false;
     bool m_s = false;
     bool m_cy = false;

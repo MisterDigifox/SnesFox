@@ -156,6 +156,7 @@ Display::~Display() {
     ImGui::DestroyContext();
     if (m_frameTex)      SDL_DestroyTexture(m_frameTex);
     if (m_tileSheetTex)  SDL_DestroyTexture(m_tileSheetTex);
+    if (m_gsuRamTex)     SDL_DestroyTexture(m_gsuRamTex);
     if (m_renderer)  SDL_DestroyRenderer(m_renderer);
     if (m_window)    SDL_DestroyWindow(m_window);
     SDL_Quit();
@@ -436,6 +437,38 @@ void Display::drawBottomPanel(const DebugPanel& panel) {
         ImGui::TextDisabled("(coming soon)");
     }
 
+    if (panel.hasGsu) {
+        ImGui::SeparatorText("GSU RAM Viewer");
+
+        if (!m_gsuRamTex) {
+            m_gsuRamTex = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_ARGB8888,
+                                            SDL_TEXTUREACCESS_STREAMING, kGsuRamMaxW, kGsuRamMaxH);
+            if (m_gsuRamTex) {
+                SDL_SetTextureBlendMode(m_gsuRamTex, SDL_BLENDMODE_NONE);
+                SDL_SetTextureScaleMode(m_gsuRamTex, SDL_ScaleModeNearest);
+            }
+        }
+        if (m_gsuRamTex) {
+            SDL_UpdateTexture(m_gsuRamTex, nullptr, panel.gsuRamArgb.data(),
+                              kGsuRamMaxW * static_cast<int>(sizeof(uint32_t)));
+
+            const int w = panel.gsuRamWidthPx > 0 ? panel.gsuRamWidthPx : kGsuRamMaxW;
+            const int h = panel.gsuRamHeightPx > 0 ? panel.gsuRamHeightPx : kGsuRamMaxH;
+            constexpr float kGsuScale = 2.0f;
+            const ImVec2 uv1(static_cast<float>(w) / kGsuRamMaxW, static_cast<float>(h) / kGsuRamMaxH);
+            ImGui::Image(m_gsuRamTex, ImVec2(w * kGsuScale, h * kGsuScale), ImVec2(0.0f, 0.0f), uv1);
+
+            if (ImGui::IsItemHovered()) {
+                const ImVec2 imgMin = ImGui::GetItemRectMin();
+                const ImVec2 mousePos = ImGui::GetMousePos();
+                const int px = std::clamp(static_cast<int>((mousePos.x - imgMin.x) / kGsuScale), 0, w - 1);
+                const int py = std::clamp(static_cast<int>((mousePos.y - imgMin.y) / kGsuScale), 0, h - 1);
+                ImGui::SetTooltip("Pixel (%d, %d)\nSCBR:$%02X RAMBR:%d  %dbpp  %dx%d",
+                                  px, py, panel.gsuScbr, panel.gsuRambr ? 1 : 0, panel.gsuRamBpp, w, h);
+            }
+        }
+    }
+
     ImGui::EndChild();
     ImGui::End();
 }
@@ -459,6 +492,56 @@ void Display::drawGameInfoPanel(const DebugPanel& panel) {
     ImGui::Text("BG1: $%04X  BG2: $%04X  BG3: $%04X  BG4: $%04X",
                  panel.bgChrBase[0], panel.bgChrBase[1],
                  panel.bgChrBase[2], panel.bgChrBase[3]);
+
+    ImGui::End();
+}
+
+void Display::drawGsuDebugPanel(const DebugPanel& panel) {
+    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(TEXT_PANEL_X), static_cast<float>(WINDOW_HEIGHT)));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(PANEL_WIDTH), static_cast<float>(BOTTOM_PANEL_HEIGHT)));
+    ImGui::Begin("GSU Debugger", nullptr, kBottomPanelFlags);
+
+    if (!panel.hasGsu) {
+        ImGui::TextDisabled("(no SuperFX chip in this ROM)");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::SeparatorText("GSU Debugger");
+    ImGui::Text("State: %s   Launches: %u  Stops: %u  Plots: %llu",
+                panel.gsuRunning ? "RUNNING" : "stopped",
+                panel.gsuLaunches, panel.gsuStops,
+                static_cast<unsigned long long>(panel.gsuPlotCount));
+    ImGui::Text("PC: $%02X:%04X    SCBR:$%02X SCMR:$%02X ROMBR:$%02X RAMBR:%d",
+                panel.gsuPbr, panel.gsuPcAddr, panel.gsuScbr, panel.gsuScmr, panel.gsuRombr,
+                panel.gsuRambr ? 1 : 0);
+    ImGui::TextColored(VALUE_COLOR, "-> %s", panel.gsuCurrentInstr.c_str());
+
+    {
+        const uint16_t sfr = panel.gsuSfr;
+        ImGui::Text("SFR: Z=%d C=%d S=%d OV=%d GO=%d ALT1=%d ALT2=%d B=%d IRQ=%d",
+                    (sfr >> 1) & 1, (sfr >> 2) & 1, (sfr >> 3) & 1, (sfr >> 4) & 1,
+                    (sfr >> 5) & 1, (sfr >> 8) & 1, (sfr >> 9) & 1, (sfr >> 12) & 1, (sfr >> 15) & 1);
+    }
+
+    ImGui::SeparatorText("Registers");
+    for (int row = 0; row < 4; ++row) {
+        ImGui::Text("r%-2d:%04X  r%-2d:%04X  r%-2d:%04X  r%-2d:%04X",
+                    row * 4 + 0, panel.gsuRegs[row * 4 + 0],
+                    row * 4 + 1, panel.gsuRegs[row * 4 + 1],
+                    row * 4 + 2, panel.gsuRegs[row * 4 + 2],
+                    row * 4 + 3, panel.gsuRegs[row * 4 + 3]);
+    }
+
+    ImGui::SeparatorText("Instruction Log");
+    ImGui::BeginChild("GsuLogScroll", ImGui::GetContentRegionAvail(), false);
+    for (const std::string& line : panel.gsuLog) {
+        ImGui::TextUnformatted(line.c_str());
+    }
+    if (!panel.gsuLog.empty()) {
+        ImGui::SetScrollHereY(1.0f);
+    }
+    ImGui::EndChild();
 
     ImGui::End();
 }
@@ -489,6 +572,7 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
     drawRightPanel(panel);
     drawBottomPanel(panel);
     drawGameInfoPanel(panel);
+    drawGsuDebugPanel(panel);
 
     // Divider lines: drawn via a plain (non-popup) ImGui window's own draw list rather
     // than a raw SDL_RenderDrawLine after ImGui::Render(). A raw SDL draw paints over
