@@ -1,5 +1,5 @@
 #include "gsu.hpp"
-
+#include "gsu_disasm.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -175,6 +175,16 @@ void GSU::mainStep(GsuHost& host) {
         m_debugLog[m_debugLogPos] = entry;
         m_debugLogPos = (m_debugLogPos + 1) % kDebugLogSize;
         if (m_debugLogCount < kDebugLogSize) ++m_debugLogCount;
+
+        // --write-gsu (snesfox_app.cpp): full-session, unbounded twin of the ring-buffer log
+        // above — same fields, same gsuDisassemble() call the live UI panel uses, just written
+        // out immediately instead of being kept in a fixed-size buffer.
+        if (m_traceFile) {
+            const uint16_t opcodeAddr = static_cast<uint16_t>(entry.pc - 1);
+            const std::string instr = gsuDisassemble(opcodeAddr, entry.opcode, entry.alt1,
+                                                       entry.alt2, entry.operand1, entry.operand2);
+            std::fprintf(m_traceFile, "$%02X:%04X  %s\n", entry.pbr, opcodeAddr, instr.c_str());
+        }
     }
 
     static int traceLeft = [] {

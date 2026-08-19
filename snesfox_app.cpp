@@ -845,7 +845,7 @@ int runCov(const std::string& romPath, const std::string& covPath, uint64_t fram
     return 0;
 }
 
-int runEmu(const std::string& initialRomPath, bool writeTrace = false) {
+int runEmu(const std::string& initialRomPath, bool writeTrace = false, bool writeGsuTrace = false) {
     printMissingCpuOpcodes(cpuOpcodesTable);
 
     // --write: dump every 65816 instruction actually executed by the CPU, in order, as
@@ -857,6 +857,18 @@ int runEmu(const std::string& initialRomPath, bool writeTrace = false) {
         traceFile.open("cpu.asm", std::ios::out | std::ios::trunc);
         if (!traceFile) {
             std::cerr << "--write: could not open cpu.asm for writing\n";
+        }
+    }
+
+    // --write-gsu: same idea as --write, but for every GSU instruction executed while SFR.GO
+    // is set, to gsu.asm — via GSU::setTraceFile (gsu.cpp), the unbounded twin of the
+    // fixed-size debugLogEntry() ring buffer the live UI panel uses. Re-armed on each ROM
+    // (re)load below since a new Bus/GSU instance is constructed then.
+    std::FILE* gsuTraceFile = nullptr;
+    if (writeGsuTrace) {
+        gsuTraceFile = std::fopen("gsu.asm", "w");
+        if (!gsuTraceFile) {
+            std::cerr << "--write-gsu: could not open gsu.asm for writing\n";
         }
     }
 
@@ -894,6 +906,7 @@ int runEmu(const std::string& initialRomPath, bool writeTrace = false) {
 
         Bus bus(data, savePath);
         bus.reset();
+        if (gsuTraceFile) bus.gsu().setTraceFile(gsuTraceFile);
 
         CPU cpu;
         cpu.reset(bus, resetVector);
@@ -1008,13 +1021,14 @@ int runEmu(const std::string& initialRomPath, bool writeTrace = false) {
         }
     }
 
+    if (gsuTraceFile) std::fclose(gsuTraceFile);
     return 0;
 }
 
 void printUsage() {
     std::cerr << "Usage:\n";
     std::cerr << "  ./snesfox selftest                  # PPU register regression tests (no ROM)\n";
-    std::cerr << "  ./snesfox emu <rom.sfc> [--write]    # --write dumps every executed instruction to cpu.asm\n";
+    std::cerr << "  ./snesfox emu <rom.sfc> [--write] [--write-gsu]  # dump every executed CPU/GSU instruction to cpu.asm/gsu.asm\n";
     std::cerr << "  ./snesfox snap <rom.sfc> [frames]   # dump PPU/VRAM heuristics (no SDL)\n";
     std::cerr << "  ./snesfox header <rom.sfc>\n";
     std::cerr << "  ./snesfox cov <rom.sfc> <coverage.out> [frames]\n";
@@ -1041,10 +1055,12 @@ int SnesFoxApp::run(int argc, char** argv) {
 
     if (mode == "emu") {
         bool writeTrace = false;
+        bool writeGsuTrace = false;
         for (int i = 3; i < argc; ++i) {
             if (std::string(argv[i]) == "--write") writeTrace = true;
+            if (std::string(argv[i]) == "--write-gsu") writeGsuTrace = true;
         }
-        return runEmu(argv[2], writeTrace);
+        return runEmu(argv[2], writeTrace, writeGsuTrace);
     }
 
     if (mode == "snap") {

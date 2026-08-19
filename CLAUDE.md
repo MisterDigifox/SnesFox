@@ -26,7 +26,7 @@ Compiles every `*.cpp` in the repo root plus `tests/*.cpp` and the vendored `img
 ## CLI usage
 
 ```bash
-./snesfox emu <rom.sfc> [--write]                    # SDL debug window: pause, single-step; --write dumps every executed instruction to cpu.asm
+./snesfox emu <rom.sfc> [--write] [--write-gsu]      # SDL debug window: pause, single-step; --write/--write-gsu dump every executed CPU/GSU instruction to cpu.asm/gsu.asm
 ./snesfox snap <rom.sfc> [frames]                     # headless PPU/VRAM heuristic dump
 ./snesfox header <rom.sfc>                            # parse + print SNES header, LoROM/HiROM detect
 ./snesfox cov <rom.sfc> <coverage.out> [frames]       # headless run, record every PC fetched as an instruction

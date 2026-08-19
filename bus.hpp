@@ -81,6 +81,7 @@ public:
 
     bool hasSuperFx() const { return m_hasSuperFx; }
     const GSU& gsu() const { return m_gsu; }
+    GSU& gsu() { return m_gsu; }
     // Raw GSU work RAM (banks $70 0x00000-0x0FFFF, $71 0x10000-0x1FFFF), for the debug UI's
     // GSU RAM Viewer — decodes whatever bitplane framebuffer the GSU last plotted into it.
     const std::vector<uint8_t>& gsuWorkRam() const { return m_gsuRam; }
