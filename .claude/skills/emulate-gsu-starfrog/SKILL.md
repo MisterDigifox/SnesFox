@@ -248,6 +248,23 @@ separate VRAM/DMA-addressing bug. Re-verify anything below against a fresh
 trace; treat it as historical context for how the bug used to look, not a
 live TODO list.
 
+## Known-fixed bug: joypad auto-read was gated by NMI-enable instead of VBlank (2026-08-19)
+
+Found via real interactive testing (`./snesfox emu`): keyboard input felt completely dead on all
+three Super FX ROMs (`StarFox`/`StarFrog`/`Star3D`) while working fine on non-GSU ROMs. Root cause:
+`advanceCpuScheduling` (`snesfox_app.cpp`) only resampled `sampleJoy1`/`sampleJoy2` when
+`Bus::stepPeripherals`'s return value was true — which is gated by NMI-enable (`$4200` bit7). Real
+hardware's auto-joypad-read latches every VBlank *independent* of NMI-enable (they're separate
+concerns in the same register) — and GSU titles routinely run long interrupt-masked polling
+stretches (`SFR.GO`/H-V-counter polling, documented throughout this skill), so `m_nmiEnabled` could
+stay false for most of a play session, starving joypad sampling the whole time under the old logic.
+Fixed by adding `Bus::consumeVblankLatch()` — a separate flag set unconditionally on the same VBlank
+edge as the NMI check, consumed by the app loop to resample input regardless of whether NMI actually
+fires that call. Deliberately additive: didn't touch `stepPeripherals`'s existing NMI-gated
+early-return or the H-IRQ edge check right after it (both fragile, already carefully tuned per the
+timing bugs documented above). Verified: `selftest` 22/22, `release.sh` round-trip unchanged, and
+the user confirmed input responds correctly in `./snesfox emu` on all three GSU fixtures afterward.
+
 ## Known remaining issue (as of 2026-08-19, post-pipeline-fix)
 
 `petesphere`/`petecube` (the title screen's rotating logo object,
