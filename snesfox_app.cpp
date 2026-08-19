@@ -86,11 +86,16 @@ constexpr uint64_t COV_MAX_STEPS = 20000000ull;
 
 inline void advanceCpuScheduling(Bus& bus, CPU& cpu, bool updateJoyOnNmi, bool suppressJoypad = false) {
     const bool nmi = bus.stepPeripherals(cpu.cycles(), cpu.fineCycles());
+    // Auto-joypad-read latches every real VBlank on real hardware, independent of whether NMI
+    // itself is enabled ($4200 bit7) — so this must not be gated behind `nmi` (which is). See
+    // Bus::consumeVblankLatch()'s doc comment: without this split, a ROM running an
+    // interrupt-masked polling loop across VBlank (GSU titles routinely do, per this codebase's
+    // own GSU debugging history) never gets fresh joypad state until it re-enables NMI.
+    if (bus.consumeVblankLatch() && updateJoyOnNmi) {
+        bus.setJoy1(sampleJoy1(suppressJoypad));
+        bus.setJoy2(sampleJoy2(suppressJoypad));
+    }
     if (nmi) {
-        if (updateJoyOnNmi) {
-            bus.setJoy1(sampleJoy1(suppressJoypad));
-            bus.setJoy2(sampleJoy2(suppressJoypad));
-        }
         cpu.triggerNmi(bus);
     }
     if (bus.takePendingIrq()) {

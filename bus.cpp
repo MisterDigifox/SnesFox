@@ -185,6 +185,7 @@ bool Bus::stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles) {
         if (oldV < VBLANK_START && m_vCounter >= VBLANK_START) {
             m_nmiFlag = true;
             m_vblankWaiPending = true;
+            m_vblankLatchPending = true;
             if (m_nmiEnabled) {
                 nmiReturn = true;
             }

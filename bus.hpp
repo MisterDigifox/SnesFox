@@ -35,6 +35,15 @@ public:
     // Returns true when VBlank starts and NMI should be delivered
     bool stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles);
 
+    // Real hardware auto-latches the joypad registers ($4218-$421B) every VBlank regardless of
+    // whether NMI itself is enabled ($4200 bit7) — they're independent bits. stepPeripherals's
+    // own return value stays gated by NMI-enable (needed for its early-return/H-IRQ interaction
+    // above), so this is tracked separately: true once per real VBlank edge, consumed (reset to
+    // false) by the caller. Without this, a ROM that runs long interrupt-masked polling loops
+    // (documented elsewhere in this codebase for GSU titles' H/V-counter and SFR.GO polling)
+    // never gets fresh joypad state during that stretch, making input feel completely dead.
+    bool consumeVblankLatch() { return std::exchange(m_vblankLatchPending, false); }
+
     // After stepPeripherals + optional triggerNmi/triggerIrq, call once per CPU step.
     // Wakes WAI on VBlank edges when NMITIMEN masks NMI (65C816 libs use WAI in WaitForVBlank).
     void syncWaiAfterVblankEdge(CPU& cpu);
@@ -92,6 +101,7 @@ private:
     bool m_nmiEnabled = false;
     mutable bool m_nmiFlag = false;
     bool             m_vblankWaiPending = false;
+    bool             m_vblankLatchPending = false;
 
     // V/H counters (start at last line so first emulated scan step wraps 261→0 like post-reset HW)
     uint16_t m_hCounter   = 0;
