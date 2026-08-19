@@ -55,68 +55,47 @@ A bare `./snesfox` (no subcommand) only prints usage and exits 1 — always pass
 
 `mainStep()`'s r15 (PC) bookkeeping is a `m_r15Modified || m_r[15] != pcBefore` check, not just the flag alone: ares's register file is a `Register` wrapper whose `operator=` sets a `modified` bit on *every* write, so any ares instruction that happens to target r15 (via its `TO`/`WITH`-prefix destination machinery, not just literal jump/branch opcodes) is automatically tracked. `gsu.cpp` uses a raw `std::array<uint16_t,16>` instead, with `m_r15Modified` set manually at only a few call sites (`setR15`/`addR15`, `IWT`/`LM`/`SM` when n==15) — `insnLoad` (register-indirect `LDW (Rn)`, the mechanism real GSU code uses for a stack-based `mpop pc` return) was a real, previously-undiscovered gap: it never set the flag, so a freshly-popped return address silently got incremented by one on the next step, corrupting every such return. Comparing against `pcBefore` (already captured earlier in the same function for the trace/debug-log code) catches this class of bug generically instead of requiring an audit of every `dr()`-writing instruction. `GSU::tick()` similarly must decrement `m_romcl`/`m_ramcl` (the pending ROM/RAM buffer-commit countdowns) *independently*, each against the full `clocks` argument — ares's `SuperFX::step()` does this in parallel; an earlier version here spent `clocks` on the ROM branch first and only gave RAM whatever was left over, which could delay a same-tick RAM write's commit.
 
-See the `emulate-gsu-starfrog` skill (`.claude/skills/`) for the full debugging methodology, the known-fixed bug list above, and prior-session status (StarFox/StarFrog progress notes, the deleted `SNESFOX_GSU_NO_AC1D_HACK` band-aid, and the `mdo_3d_display`/`m_dlptr` clobber investigation) — **but read the "GSU pipeline prefetch bug" section immediately below first**, since it's a newer, more fundamental finding from 2026-08-19 that may substantially redirect or invalidate parts of that investigation.
+See the `emulate-gsu-starfrog` skill (`.claude/skills/`) for the full debugging methodology, the known-fixed bug list above, and prior-session status (StarFox/StarFrog progress notes, the deleted `SNESFOX_GSU_NO_AC1D_HACK` band-aid, and the `mdo_3d_display`/`m_dlptr` clobber investigation) — the "RESOLVED" section immediately below covers a newer, more fundamental fix from 2026-08-19 (the r15 auto-increment epilogue) that likely invalidates parts of that older investigation; re-check anything from that skill against a fresh trace before trusting it.
 
-### ⚠️ IN PROGRESS (2026-08-19): real GSU prefetch-queue bug found via Star3D, fix incomplete — `gsu.cpp` currently has uncommitted, broken WIP changes
+### RESOLVED (2026-08-19): GSU r15 auto-increment epilogue, not the prefetch queue itself, was the real bug
 
-**Symptom**: `Star3D/star3d.sfc` (the simplest possible Super FX ROM in this repo, see the
-`build-gsu-demo-star3d` skill) doesn't render at all — `./snesfox snap Star3D/star3d.sfc 300` shows
-`GSU: launches=1 stops=1 ... plotCount=0 lastSessionCycles=7 pc=$0x01:000B`, i.e. it stops after ~7
-GSU cycles having executed almost nothing.
+`Star3D/star3d.sfc` used to not render at all (`GSU: launches=1 stops=1 ... plotCount=0
+lastSessionCycles=7 pc=$0x01:000B` — stopped after ~7 cycles having executed almost nothing). This
+was initially misdiagnosed as a bug in the single-byte prefetch queue itself (`peekpipe()`/`pipe()`),
+since a minimal repro (`IWT R3,#0x0080` immediately followed by `IWT R7,#0x0040`) reliably produced
+`r7=0x40F7` instead of `0x0040`. A first fix attempt added `m_pipelineAddr`/`m_pipelineValid` state to
+`peekpipe()` to dodge what looked like a redundant refetch — this did **not** fix the repro and was a
+wrong turn: a line-by-line diff against `ares-ref/sfc/coprocessor/superfx/memory.cpp` found `pipe()`/
+`peekpipe()` matched ares exactly, textually, the whole time.
 
-**Root cause, confirmed with high confidence**: a real bug in the single-byte instruction-prefetch
-queue (`GSU::peekpipe()`/`GSU::pipe()`/`m_pipeline`, `gsu.cpp`). Whenever a GSU instruction consumes
-operand bytes via `pipe()` (any `IWT`/`LMS`/`SMS`/`IBT`/branch), the **next** instruction's
-`peekpipe()` redundantly re-reads the exact ROM address that instruction's last `pipe()` call already
-fetched, instead of the genuinely-next byte. If the next instruction is itself multi-byte, its own
-*first operand* gets corrupted into a repeat of its own opcode byte (`IWT R7,#64` immediately after
-`IWT R3,#128` produces `r7=0x40F7`, not `0x0040` — confirmed via a minimal standalone repro, see
-below). If the next instruction is single-byte, it silently executes twice instead.
+**Real root cause**: `mainStep()`'s r15 auto-increment epilogon in `gsu.cpp` compared `m_r[15] !=
+pcBefore` to decide whether to suppress the trailing `++m_r[15]` (added to fix a prior, real bug where
+`insnLoad`'s register-indirect `mpop pc` never set `m_r15Modified`). That comparison is too broad:
+`pipe()` itself advances `m_r[15]` by one per operand byte it fetches, so *any* multi-byte instruction
+(`IWT`/`LM`/`SM`/`IBT`/`LMS`/`SMS`, a branch's displacement byte, …) already has `m_r[15] != pcBefore`
+by the time the epilogue runs — even though nothing "jumped". The epilogue was misreading that as an
+explicit r15 write and wrongly skipping the final `+1`, leaving r15 exactly one byte short after every
+such instruction and corrupting the *next* instruction's first operand — exactly the `IWT`/`IWT`
+symptom above. Confirmed against the real ares `superfx.cpp::main()` (fetched from upstream, not
+previously vendored in `ares-ref/`): ares's epilogue is unconditional (`r[15]++` unless the `Register`
+wrapper's `modified` flag is set), and ares's own `pipe()` explicitly resets that flag to `false`
+right after advancing r15 — i.e. pipe()-driven advancement is deliberately *not* what the flag means.
 
-This is **confirmed to be a real emulator bug, not a hardware quirk** `build.py` needs to route
-around (unlike the already-known branch delay-slot quirk): real, shipped Argonaut GSU source
-(`StarFox/SG_extracted/mdrawlis.mc:1258-1259`, `mobj.mc:319-320`, `mtxtprt.mc:146-147`,
-`mbumwipe.mc:173-174`, `mdsprite.mc:91-92`, `mgdots.mc:255-256`) has multiple strictly-adjacent
-`iwt`/`iwt` pairs with zero padding, in code that shipped and works on real hardware — that could not
-exist if this pattern were broken on real Super FX silicon.
+**Fix**: track how many `pipe()` calls happened during the current instruction (`m_pipeCallCount`,
+reset before `instruction()` runs, incremented in `pipe()`) and compare `m_r[15]` against `pcBefore +
+m_pipeCallCount` (the value r15 naturally reaches after ordinary operand fetches) instead of raw
+`pcBefore`. This still catches a genuine explicit write (`mpop pc`, 0 pipe() calls but r15 changes
+anyway) while no longer misfiring on ordinary multi-byte instructions. Once this was fixed, the
+`peekpipe()` address-tracking workaround became unnecessary dead weight and was reverted back to
+ares's literal unconditional refetch.
 
-A line-by-line diff of `gsu.cpp`'s `pipe()`/`peekpipe()`/`readOpcode()` against
-`ares-ref/sfc/coprocessor/superfx/memory.cpp` found **no textual difference** — despite that, the bug
-reproduces 100% deterministically. **The exact reason gsu.cpp diverges from ares despite looking
-identical has not been found.** Treat prior-session StarFox findings that were only validated by
-self-consistency against the (already-buggy) running emulator — not against independently-known-good
-values — as suspect until re-checked after this is fixed (e.g. the `emulate-gsu-starfrog` skill's
-`mallrotzsort`/`$01:B189`/`r9=0xF2F9` conclusions from the same 2026-08-19 session).
-
-**Minimal deterministic repro** (works regardless of what precedes it):
-```
-CACHE (or NOP, or nothing)
-IWT R3, #0x0080
-IWT R7, #0x0040   <- corrupted: comes out as 0x40F7, not 0x0040
-STOP
-```
-
-**Current `gsu.cpp` state: mid-fix, confirmed still broken, do not trust.** A first attempt added
-`m_pipelineAddr`/`m_pipelineValid` members and rewrote `peekpipe()`/`pipe()` to skip the redundant
-refetch when `m_pipelineAddr == m_r[15]` — this is necessary but incomplete: when `peekpipe()` skips
-its refetch, it must still advance the fetch pointer to `ROM[m_pipelineAddr + 1]` (mirroring what
-`pipe()` does) instead of leaving `m_pipeline` holding the stale opcode byte, or a following `pipe()`
-call within the *same* instruction delivers that stale value as if it were a fresh operand — this is
-exactly the corruption that's still reproducing. Full analysis, the correct next design (decouple the
-fetch pointer entirely from `r15`, advance it by 1 unconditionally on every `pipe()`/`peekpipe()`
-call, resync it to `r15` only after an explicit jump or a fresh GSU launch), and the ordered resume
-checklist are in the local memory file `project_gsu_pipeline_bug_wip.md` (auto-memory, not in this
-repo — ask Claude to recall it, or see the equivalent write-up that should be added to the
-`emulate-gsu-starfrog` skill once the fix actually works). `selftest`/`release.sh` round-trip still
-pass with the WIP change (that pipeline path isn't exercised by the 65816-only fixture ROMs), but
-Star3D/StarFox were not retested against the incomplete fix.
-
-**Next steps, in order**: (1) finish the fetch-pointer redesign in `peekpipe()`/`pipe()`; (2) verify
-against the standalone repro harness (`iwt_test.cpp`, source in the memory file above, no ROM needed)
-until `r3`/`r7`/`r8` all come out correct; (3) re-run `selftest`/`release.sh`; (4) `./snesfox snap
-Star3D/star3d.sfc 300` and actually look at the rendered PPM (see `build-gsu-demo-star3d` skill) to
-confirm a real wireframe cube, not just nonzero `plotCount`; (5) if that works, re-run the StarFox
-`mallrotzsort` investigation from scratch, since this bug likely explains a lot of it.
+**Verified**: `Star3D/star3d.sfc` now renders a correct wireframe cube (not just nonzero `plotCount`
+— visually confirmed via the PPM `snap` writes). `StarFox/starfox.sfc`'s title screen now renders
+correctly too (logo, starfield, "SUPER STAR FOX WEEKEND COMPETITION" text) *without* the old
+`AC1D`-hack (already removed in an earlier session) — this is the real fix doing it, not a band-aid.
+`StarFrog/starfrog.sfc` still renders fully black past frame ~1200 — a separate, not-yet-investigated
+issue, no longer related to this pipeline bug. `selftest` (22/22) and `release.sh`'s round-trip both
+still pass.
 
 **DMA/HDMA (`dma.hpp`/`.cpp`)**: general-purpose DMA via `$420B` and per-scanline HDMA via `$420C` (direct and indirect table modes), called from `Bus::stepPeripherals` once per scanline — this is what drives effects like per-line scrolling in the `ParallaxScrolling.sfc` fixture and in `SplitScrolling.sfc` (built from the sibling untracked `SplitScrolling/` PVSnesLib source project, not committed as a prebuilt ROM — see `tests/ppu_test.cpp` for the window/OBJ-address regressions it originally caught). Both genuinely steal CPU cycles matching real hardware (`Dma::trigger`/`beginHdmaFrame`/`runHdmaForScanline` return the master-clock cost — 8 cycles/byte plus fixed overhead per the formulas in `ares-ref/sfc/cpu/dma.cpp` — which `CPU::step()`/`Bus` fold into both cycle counters above); this matters for any timing-sensitive polling loop running near a large DMA transfer, not just GSU titles.
 

@@ -47,7 +47,6 @@ void GSU::reset() {
     m_pixelCache[1].offset = 0xFFFF;
 
     m_pipeline = 0x01; // NOP — matches ares; 0x00 would execute STOP on first fetch
-    m_pipelineValid = false; // forces the first peekpipe() after launch to actually refetch
     m_debugLog.fill(DebugLogEntry{});
     m_debugLogPos = 0;
     m_debugLogCount = 0;
@@ -225,6 +224,7 @@ void GSU::mainStep(GsuHost& host) {
             m_sreg & 0xF, m_dreg & 0xF, m_ramaddr, sfrRead());
     }
 
+    m_pipeCallCount = 0;
     instruction(opcode, host);
 
     // ares: any write to r[14] (ADD/MOVE/INC/…) reloads the ROM read buffer.
@@ -240,11 +240,19 @@ void GSU::mainStep(GsuHost& host) {
     // also target r15 as their dr() (LOAD chief among them — this is exactly the "to pc / ldw
     // (rsp)" idiom real GSU code uses for a stack-based subroutine return, e.g. mpop pc) do not,
     // so relying on m_r15Modified alone silently incremented a just-restored return address by
-    // one, corrupting every register-indirect jump/return that isn't IWT/branch/JMP-based. Ares's
-    // Register wrapper avoids this class of bug entirely by tracking "modified" on every write;
-    // our raw uint16_t register file has no such hook, so fall back to comparing against the
-    // pre-instruction value instead of auditing/patching every dr()-writing instruction site.
-    if (m_r15Modified || m_r[15] != pcBefore) {
+    // one. Comparing against the raw pre-instruction pcBefore (instead of auditing/patching every
+    // dr()-writing call site) fixed that, but overshot: pipe() itself also advances r15 (once per
+    // operand byte fetched), so any multi-byte instruction — IWT/LM/SM/IBT/LMS/SMS, a taken-or-not
+    // branch's displacement byte, etc. — makes m_r[15] != pcBefore too, even though nothing
+    // "jumped." That's not a real write in ares's sense (ares's own pipe() explicitly resets its
+    // Register's modified flag right after advancing r15), so this was wrongly suppressing the
+    // final +1 on every such instruction, leaving r15 one byte short and corrupting the next
+    // instruction's first operand. Comparing against pcBefore + m_pipeCallCount (the r15 value
+    // pipe() naturally advances to, tracked above) instead of raw pcBefore keeps catching a
+    // genuine explicit write (LOAD-to-r15, still != the natural value) without misfiring on
+    // ordinary operand fetches.
+    const uint16_t naturalR15 = static_cast<uint16_t>(pcBefore + m_pipeCallCount);
+    if (m_r15Modified || m_r[15] != naturalR15) {
         m_r15Modified = false;
     } else {
         ++m_r[15];
@@ -299,30 +307,14 @@ void GSU::tick(uint32_t clocks, GsuHost& host) {
 
 uint8_t GSU::peekpipe(GsuHost& host) {
     const uint8_t result = m_pipeline;
-    // Only refetch when m_pipeline's known address (m_pipelineAddr, tracked by pipe() below)
-    // doesn't match the current r15 — i.e. skip it when the *previous* instruction's last
-    // `pipe()` call already fetched from wherever r15 currently sits (pipe()'s fetch-and-advance
-    // are fused: it reads from, and lands r15 exactly on, the same address). Refetching
-    // unconditionally here instead (an unqualified `readOpcode(m_r[15])` every call, matching a
-    // literal reading of ares's `peekpipe()`) redundantly re-reads that same byte instead of the
-    // genuinely-next one, and since this delivered value survives untouched into whatever
-    // instruction runs next: a single-byte instruction with no pipe() calls of its own to
-    // overwrite it gets its execution silently duplicated one cycle later, while a multi-byte
-    // instruction gets its own first operand corrupted into a repeat of its own opcode byte.
-    // The address-equality check (rather than a plain "was the last op multi-byte" flag) also
-    // self-corrects after a taken branch/jump for free: pipe()'s own displacement/operand read
-    // still marks the *fall-through* address fresh, but setR15()/addR15() then move r15 to the
-    // branch target, which no longer matches m_pipelineAddr — correctly forcing a real refetch
-    // from the target next time, with no extra bookkeeping needed at the jump site.
-    // Confirmed empirically against real, shipped Argonaut GSU code (StarFox/SG_extracted -
-    // `mdrawlis.mc`/`mobj.mc`/`mtxtprt.mc`/etc all contain consecutive `iwt`/`iwt` pairs with no
-    // padding between them, which only work if this fetch is properly deduplicated) and via a
-    // standalone harness that reproduced the corruption byte-for-byte before this fix.
-    if (!m_pipelineValid || m_pipelineAddr != m_r[15]) {
-        m_pipeline = readOpcode(host, m_r[15]);
-        m_pipelineAddr = m_r[15];
-        m_pipelineValid = true;
-    }
+    // Matches ares's peekpipe() literally: unconditionally refetch from the current r15. This
+    // is safe (doesn't re-read the same byte twice) only because mainStep()'s epilogue always
+    // advances r15 by exactly (1 + however many pipe() calls this instruction made) unless r15
+    // was genuinely overwritten by a jump/branch/load — see m_pipeCallCount below. An earlier
+    // version tried to dodge the "redundant" refetch here with an address-equality check instead
+    // of fixing that epilogue accounting; it was solving a symptom, not the cause, and diverged
+    // from ares for no benefit once the real bug was found.
+    m_pipeline = readOpcode(host, m_r[15]);
     m_r15Modified = false;
     return result;
 }
@@ -331,16 +323,12 @@ uint8_t GSU::pipe(GsuHost& host) {
     const uint8_t result = m_pipeline;
     const uint16_t fetchAddr = static_cast<uint16_t>(m_r[15] + 1);
     m_pipeline = readOpcode(host, fetchAddr);
-    // This fetch already lands r15 (below) on fetchAddr - the queue is fresh (m_pipelineAddr
-    // will equal r15) for whatever runs next, so the following peekpipe() must not redundantly
-    // re-read it. See peekpipe()'s comment for the full explanation.
-    m_pipelineAddr = fetchAddr;
-    m_pipelineValid = true;
     if (std::getenv("SNESFOX_GSU_PIPE_TRACE")) {
         std::fprintf(stderr, "[PIPE] r15=%04X result=%02X fetchAddr=%04X newPipeline=%02X\n",
             m_r[15], result, fetchAddr, m_pipeline);
     }
     ++m_r[15];
+    ++m_pipeCallCount;
     m_r15Modified = false;
     return result;
 }
@@ -930,7 +918,6 @@ void GSU::insnSTOP(GsuHost& host) {
 
     m_go = false;
     m_pipeline = 0x01;
-    m_pipelineValid = false; // forces the next launch's first peekpipe() to actually refetch
     resetPrefixes();
 }
 
