@@ -53,25 +53,31 @@ described in detail in the `emulate-gsu-starfrog` skill — read that first for
 the mechanics. This skill only covers what's specific to using `StarFox/` as
 the target instead of `StarFrog/`.
 
-## Observed state (verified this session, `./snesfox snap StarFox/starfox.sfc <N>`)
+## Observed state
 
+**Verified 2026-08-19, visually, after the GSU r15-epilogue pipeline fix (see
+`CLAUDE.md`'s GSU "RESOLVED" section)**: `./snesfox snap StarFox/starfox.sfc 1500`
+then inspecting `/tmp/snap.ppm` shows the title screen rendering **correctly** —
+the "SUPER STAR FOX WEEKEND COMPETITION" logo, the rotating planet, the
+starfield dust, and the copyright text all present and in the right place.
+Before that fix (i.e. on any snesfox checkout predating it), the GSU
+self-corrupted its own r15 within the first few multi-byte instructions of
+almost every launch — this is *why* the "not yet verified" caveat below used to
+exist: the aggregate stats (`plotCount`, nonzero VRAM counts) looked plausible
+even while the actual rendered image was wrong, because a stuck-mid-render GSU
+session still plots *something* before failing. Always dump and actually look
+at `/tmp/snap.ppm` before trusting plot/launch counts alone as proof of correct
+rendering — that lesson is why this section now leads with a screenshot-checked
+claim instead of aggregate stats.
+
+Older, still-useful aggregate numbers for reference (pre-verification, same
+frame targets, counts may shift slightly with future fixes but the shape
+should stay the same):
 - Frame 300: still in an early boot/intro phase — `forcedBlank=1` (screen
-  off), `framebuffer: non-black opaque pix=0`, but the GSU is already
-  launching and plotting (`launches=18 plotCount=113`) and DMA is actively
+  off), but the GSU is already launching and plotting, and DMA is actively
   loading VRAM (BG1/BG2 CHR and tilemaps show real nonzero data).
-- Frame 1500: `forcedBlank=0` (screen turned on), real framebuffer output
-  (`non-black opaque pix=10463 uniqColors~=15`), GSU has launched 758 times
-  and plotted 705,064 pixels total, audio RMS is nonzero (music/SFX playing).
-  This is *quantitatively* further and richer than StarFrog's title-screen
-  milestone (which tops out around a few thousand plots on one looping
-  screen) — StarFox is progressing through real early-game content, not just
-  running in place.
-- **Not yet verified**: whether frame 1500's rendered image is *visually*
-  correct (no `.ppm` inspection was done this session, only the aggregate
-  stats above). Treat "renders something plausible-shaped, in growing
-  quantity, with no CPU/GSU hangs" as the current known-good baseline, and
-  dump `/tmp/snap.ppm` (written automatically by `snap`) to actually look at
-  a frame before claiming a rendering bug is fixed or absent.
+- Frame 1500: `forcedBlank=0` (screen turned on), real framebuffer output,
+  audio RMS nonzero (music/SFX playing).
 
 Use this as the starting point for any StarFox-specific investigation instead
 of re-establishing it from scratch: if a change regresses these numbers

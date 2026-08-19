@@ -55,6 +55,5 @@ struct CpuOpcode {
 
 extern const std::array<CpuOpcode, 256> cpuOpcodesTable;
 extern const std::array<CpuOpcode, 256> apuOpcodesTable;
-extern const std::array<CpuOpcode, 256> gsuOpcodesTable;
 
 void printMissingCpuOpcodes(const std::array<CpuOpcode, 256>& ops);

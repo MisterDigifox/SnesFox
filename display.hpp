@@ -46,6 +46,8 @@ struct DebugPanel {
     std::array<uint16_t, 4> bgTilemapBase{}; // VRAM word address of BG1-4's tilemap base ((BGxSC>>2)*0x400)
     std::array<uint16_t, 4> bgChrBase{};     // VRAM word address of BG1-4's tileset/CHR base (Ppu::chrBase)
     uint8_t bgMode = 0;                      // current BG mode (0-7), Ppu::bgMode()
+    uint16_t joy1 = 0;                       // last auto-joypad-read result for player 1 ($4218/$4219)
+    uint16_t joy2 = 0;                       // last auto-joypad-read result for player 2 ($421A/$421B)
 
     // GSU Debugger panel — only meaningful when hasGsu is true.
     bool hasGsu = false;

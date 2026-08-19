@@ -223,20 +223,55 @@ on (`forcedBlank`→0), the GSU actively plotting pixels every frame
 (`plotCount` incrementing continuously), real non-black framebuffer output,
 and audio playing (non-zero RMS) — by frame ~900-1200 of `snap`.
 
-## Known remaining issue (as of this writing)
+## Known-fixed bug: GSU r15 auto-increment epilogue (2026-08-19)
 
-The rendered image is still wrong: `/tmp/snap.ppm` (written automatically by
-`snap`) shows a stable (converged, not still-loading) field of incoherent
-colored noise across roughly the top-left two-thirds of the frame plus one
-correct-looking blue rectangle sprite — not a recognizable `petecube`/title
-layout. BG1's tilemap is populated (992/1024 nonzero) but suspiciously
-uniform (`02A1` repeating), and OBJ CHR has real-looking tile data (930/1024
-nonzero, arranged as a row of sprites that's plausibly the "STAR FROG" title
-text). This needs the same trace-and-diff treatment as the bugs above,
-focused this time on what the GSU is actually plotting into VRAM vs. what
-BG1/BG2's tilemap + CHR data downstream of that describe — likely either a
-GSU pixel-plot/color-mapping bug or a VRAM-write addressing issue, not a
-CPU/timing one. See `immutable-orbiting-treehouse.md` (alongside this file)
-for the full session logs and traces this was written up from — they
-reproduce deterministically from a fresh `starfrog.sfc` build if you need to
-re-derive any of it.
+`mainStep()`'s r15 auto-increment epilogue used `m_r[15] != pcBefore` as a
+proxy for "r15 was explicitly overwritten this instruction" — but `pipe()`
+itself also advances r15 (once per operand byte fetched), so *any* multi-byte
+instruction (`IWT`/`LM`/`SM`/`IBT`/`LMS`/`SMS`, a branch's displacement byte,
+…) already had `m_r[15] != pcBefore` for entirely legitimate reasons, and the
+epilogue wrongly skipped the final `+1` every time — leaving r15 one byte
+short and corrupting the *next* instruction's first operand. This silently
+broke almost every real GSU program within its first few multi-byte
+instructions per launch (confirmed via a minimal repro: `IWT R3,#0x0080`
+immediately followed by `IWT R7,#0x0040` produced `r7=0x40F7`, not `0x0040`).
+Fixed by tracking `m_pipeCallCount` per instruction and comparing against
+`pcBefore + m_pipeCallCount` instead of raw `pcBefore` — see `CLAUDE.md`'s GSU
+section for the full root-cause writeup (it was initially misdiagnosed as a
+bug in the prefetch queue itself, `peekpipe()`/`pipe()`, which turned out to
+match `ares-ref` exactly the whole time).
+
+This one fix is what actually explains the "known remaining issue" that used
+to be documented here — the colored-noise/wrong-tilemap symptom below was a
+downstream *consequence* of GSU registers being corrupted mid-render, not a
+separate VRAM/DMA-addressing bug. Re-verify anything below against a fresh
+trace; treat it as historical context for how the bug used to look, not a
+live TODO list.
+
+## Known remaining issue (as of 2026-08-19, post-pipeline-fix)
+
+`petesphere`/`petecube` (the title screen's rotating logo object,
+`MAPS_extracted/maps/title.asm`'s `mapobj 0,0,0,90,petesphere,tit_istrat`)
+now renders as a real, recognizable shape — confirmed by tracking
+`framebuffer: non-black opaque pix=` across frame counts with
+`./snesfox snap StarFrog/starfrog.sfc <N>`: 0 at frame 250, climbing
+(2401→42560) from frame 300 to 400, then back to 0 by frame 420 and
+staying there. That growth curve (screen coverage increasing roughly like
+1/z as z shrinks, then the object vanishing entirely) means **the object is
+translating toward the camera and passing through/past the near clip plane**
+— it should stay at a constant depth (`z=90` set once at placement) and only
+rotate in place, matching real hardware (confirmed by the user against bsnes
+and Mesen2, where it does not drift). `tit_strat` (`endseq.asm`, the
+per-frame half of the title's istrat) calls `s_add_playerz x` every frame —
+a routine that adds the player's current/delta world-Z to the object's world
+Z, presumably so a HUD-anchored object stays at a fixed distance in front of
+a *moving* camera. Since the title screen explicitly zeroes `lastplayz`/
+`pviewposz`/`al_worldz,x` before placing the object and disables player
+control (`pshipflags |= psf_noctrl`), the player's Z should never actually
+change here on real hardware, so `s_add_playerz` should be adding ~0 every
+frame. The likely bug is that something in snesfox causes the tracked
+player-Z (or whatever `s_add_playerz` reads) to drift anyway — not yet
+root-caused; the concrete next step is tracing `al_worldz`/`pviewposz`/
+`lastplayz`/whatever WRAM field holds player Z with `SNESFOX_WRAM_WATCH`
+across frames 250-420 to see which one moves and trace that back to its
+writer, the same method used for every fixed bug above.

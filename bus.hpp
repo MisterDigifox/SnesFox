@@ -59,6 +59,8 @@ public:
     bool takePendingIrq();
     void setJoy1(uint16_t state);
     void setJoy2(uint16_t state);
+    uint16_t joy1() const { return m_joy1; }
+    uint16_t joy2() const { return m_joy2; }
     Ppu& ppu() { return m_ppu; }
     const Ppu& ppu() const { return m_ppu; }
     APU& apu() { return m_apu; }

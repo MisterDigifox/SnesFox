@@ -493,6 +493,9 @@ void Display::drawGameInfoPanel(const DebugPanel& panel) {
                  panel.bgChrBase[0], panel.bgChrBase[1],
                  panel.bgChrBase[2], panel.bgChrBase[3]);
 
+    ImGui::SeparatorText("Joypad");
+    ImGui::Text("P1: $%04X   P2: $%04X", panel.joy1, panel.joy2);
+
     ImGui::End();
 }
 

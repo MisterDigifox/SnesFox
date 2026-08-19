@@ -446,6 +446,8 @@ DebugPanel makeDebugPanel(
     panel.sections.push_back(std::move(ppuSection));
 
     panel.bgMode = ppu.bgMode();
+    panel.joy1 = bus.joy1();
+    panel.joy2 = bus.joy2();
     for (int i = 0; i < 4; ++i) {
         panel.bgTilemapBase[i] = static_cast<uint16_t>((ppu.bgSC(i) >> 2) * 0x400);
         const uint8_t nba = (i >> 1) ? ppu.bgNBA34() : ppu.bgNBA12();
