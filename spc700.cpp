@@ -2066,9 +2066,10 @@ uint32_t Spc700::step(APU& apu) {
             return 2;
         }
 
-        case 0xFF: // STOP — normally driver exit; halt so we avoid burning host CPU.
+        case 0xFF: { // STOP — normally driver exit; halt so we avoid burning host CPU.
             m_halted = true;
-            if (std::getenv("SNESFOX_SPC_LOG")) {
+            static const bool spcLog = std::getenv("SNESFOX_SPC_LOG") != nullptr;
+            if (spcLog) {
                 const uint16_t opcAddr =
                     static_cast<uint16_t>(static_cast<unsigned>(m_pc) - 1u);
                 std::fprintf(stderr,
@@ -2078,15 +2079,18 @@ uint32_t Spc700::step(APU& apu) {
                              m_sp);
             }
             return 12;
+        }
 
-        default:
+        default: {
             // Undefined SPC700 opcode: halting used to wedge games that hit any
             // missing decode path (CPU then waits on $2140-$2143 forever). Default
             // to a 2-cycle NOP so uploads and drivers can proceed without S-DSP.
-            if (std::getenv("SNESFOX_SPC_STRICT")) {
+            static const bool spcStrict = std::getenv("SNESFOX_SPC_STRICT") != nullptr;
+            static const bool spcLog = std::getenv("SNESFOX_SPC_LOG") != nullptr;
+            if (spcStrict) {
                 m_halted = true;
             }
-            if (std::getenv("SNESFOX_SPC_LOG")) {
+            if (spcLog) {
                 const uint16_t opcAddr =
                     static_cast<uint16_t>(static_cast<unsigned>(m_pc) - 1u);
                 std::fprintf(stderr,
@@ -2098,8 +2102,9 @@ uint32_t Spc700::step(APU& apu) {
                              m_x,
                              m_y,
                              m_psw,
-                             std::getenv("SNESFOX_SPC_STRICT") ? " [HALT]" : " [NOP]");
+                             spcStrict ? " [HALT]" : " [NOP]");
             }
             return 2;
+        }
     }
 }

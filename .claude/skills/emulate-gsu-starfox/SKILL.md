@@ -48,10 +48,13 @@ maps, etc.), `MAPS_extracted/msprites/` for level-specific sprite data.
 
 `gsu.hpp`/`gsu.cpp`, `BusGsuHost` in `bus.cpp`, the ares reference source under
 `ares-ref/`, and all the env-var debug tooling (`SNESFOX_GSU_TRACE`,
-`SNESFOX_GSU_IO`, `SNESFOX_CPU_TRACE`/`_ALWAYS`, `SNESFOX_WRAM_WATCH`) are
+`SNESFOX_GSU_IO`, `SNESFOX_CPU_TRACE`/`_ALWAYS`, `SNESFOX_GSU_RAM_WATCH`) are
 described in detail in the `emulate-gsu-starfrog` skill — read that first for
-the mechanics. This skill only covers what's specific to using `StarFox/` as
-the target instead of `StarFrog/`.
+the mechanics (note: `SNESFOX_WRAM_WATCH`, a main-WRAM write-watchpoint that
+skill used to describe, has since been removed from `bus.cpp` — it ran
+unconditionally on every WRAM write; `SNESFOX_GSU_RAM_WATCH` for GSU RAM banks
+`$70`/`$71` still exists). This skill only covers what's specific to using
+`StarFox/` as the target instead of `StarFrog/`.
 
 ## Observed state
 
@@ -185,13 +188,13 @@ filled." Trace the full path explicitly:
      is exactly the shape of bug this check is for — it was never actually
      traced back to GSU-RAM-side vs. DMA-side using this method; that's the
      concrete next step if you pick that bug back up, on either fixture.
-5. There's no dedicated "watch every write inside GSU RAM" tool yet (unlike
-   `SNESFOX_WRAM_WATCH`, which is WRAM-only) — if a session needs finer
-   visibility than the DMA-trace snapshot above (e.g. watching one specific
-   tile-buffer offset across many `PLOT`s before the next DMA flush), the
-   straightforward extension is teaching `SNESFOX_WRAM_WATCH`'s matching
-   logic in `bus.cpp` to also match banks `$70`/`$71`, or adding a sibling
-   `SNESFOX_GSU_RAM_WATCH` env var following the exact same pattern.
+5. `SNESFOX_GSU_RAM_WATCH` (`gsu.cpp`) watches every write inside GSU RAM
+   (banks `$70`/`$71`) if a session needs finer visibility than the DMA-trace
+   snapshot above (e.g. watching one specific tile-buffer offset across many
+   `PLOT`s before the next DMA flush). There is no equivalent for main WRAM
+   any more — `SNESFOX_WRAM_WATCH` (`bus.cpp`) was removed since it ran
+   unconditionally on every WRAM write; re-add an equivalent there, following
+   `SNESFOX_GSU_RAM_WATCH`'s pattern, if a session genuinely needs it.
 
 ## Workflow
 
@@ -205,7 +208,7 @@ filled." Trace the full path explicitly:
    far enough to see the same PC/state repeating, the same way the general
    hang-diagnosis method in the StarFrog skill describes.
 2. **Trace and cross-reference exactly as with StarFrog**
-   (`SNESFOX_GSU_TRACE`, `SNESFOX_CPU_TRACE_ALWAYS=1`, `SNESFOX_WRAM_WATCH`),
+   (`SNESFOX_GSU_TRACE`, `SNESFOX_CPU_TRACE_ALWAYS=1`, `SNESFOX_GSU_RAM_WATCH`),
    but resolve addresses against `StarFox/SG_extracted/`+`MAPS_extracted/`
    instead of StarFrog's copies — same files in most cases (this is the
    unedited source those were forked from), but StarFox actually reaches the

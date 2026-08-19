@@ -31,6 +31,13 @@ static bool gsuIoTraceEnabled() {
     return enabled != 0;
 }
 
+// Shared by every SCMR/CFGR/etc. mode-change trace site below — was previously re-read via its
+// own independent std::getenv() at each of the 4 call sites.
+static bool gsuModeTraceEnabled() {
+    static const bool enabled = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+    return enabled;
+}
+
 bool GSU::s_trace = false;
 
 // ---------------------------------------------------------------------------
@@ -170,7 +177,10 @@ void GSU::mainStep(GsuHost& host) {
         if (m_debugLogCount < kDebugLogSize) ++m_debugLogCount;
     }
 
-    static int traceLeft = std::getenv("SNESFOX_GSU_TRACE") ? std::atoi(std::getenv("SNESFOX_GSU_TRACE")) : 0;
+    static int traceLeft = [] {
+        const char* v = std::getenv("SNESFOX_GSU_TRACE");
+        return v ? std::atoi(v) : 0;
+    }();
     if (traceLeft > 0) {
         --traceLeft;
         std::fprintf(stderr, "[GSU %02X:%04X] op=%02X r1=%04X r2=%04X r14=%04X sfr=%04X\n",
@@ -203,7 +213,8 @@ void GSU::mainStep(GsuHost& host) {
     // dlptr-lazy-reinit follow-on block at $01:B2ED, to distinguish "good" (r12 legitimately
     // small, LOOP falls through) visits from the known-bad ones (r12 garbage, LOOP misfires
     // into the unrelated fill-loop template via a stale r13).
-    if (std::getenv("SNESFOX_GSU_B2ED_TRACE") && m_pbr == 0x01 && pcBefore == 0xB2ED) {
+    static const bool b2edTrace = std::getenv("SNESFOX_GSU_B2ED_TRACE") != nullptr;
+    if (b2edTrace && m_pbr == 0x01 && pcBefore == 0xB2ED) {
         std::fprintf(stderr,
             "[B2ED-ENTRY] launch=%u r2=%04X r7=%04X r9=%04X r12=%04X r13=%04X\n",
             m_launchCount, m_r[2], m_r[7], m_r[9], m_r[12], m_r[13]);
@@ -261,7 +272,8 @@ void GSU::mainStep(GsuHost& host) {
     // POST-execution instruction-boundary trace: m_r[15] here is fully resolved (no pipeline
     // lag) and is genuinely the address of the next instruction about to be queued - unlike
     // pcBefore/opcode above, safe to compare directly against static disassembly addresses.
-    if (std::getenv("SNESFOX_GSU_POST_TRACE") && m_pbr == 0x01
+    static const bool postTrace = std::getenv("SNESFOX_GSU_POST_TRACE") != nullptr;
+    if (postTrace && m_pbr == 0x01
         && m_r[15] >= 0xB180 && m_r[15] <= 0xB200) {
         std::fprintf(stderr, "[POST] launch=%u next-pc=$01:%04X r12=%04X r13=%04X\n",
             m_launchCount, m_r[15], m_r[12], m_r[13]);
@@ -323,7 +335,8 @@ uint8_t GSU::pipe(GsuHost& host) {
     const uint8_t result = m_pipeline;
     const uint16_t fetchAddr = static_cast<uint16_t>(m_r[15] + 1);
     m_pipeline = readOpcode(host, fetchAddr);
-    if (std::getenv("SNESFOX_GSU_PIPE_TRACE")) {
+    static const bool pipeTrace = std::getenv("SNESFOX_GSU_PIPE_TRACE") != nullptr;
+    if (pipeTrace) {
         std::fprintf(stderr, "[PIPE] r15=%04X result=%02X fetchAddr=%04X newPipeline=%02X\n",
             m_r[15], result, fetchAddr, m_pipeline);
     }
@@ -583,7 +596,7 @@ void GSU::sfrWriteHigh(GsuHost& host, uint8_t value) {
 }
 
 void GSU::parseScmr(uint8_t value) {
-    static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+    const bool traceMode = gsuModeTraceEnabled();
     if (traceMode && value != m_scmrRaw) {
         std::fprintf(stderr, "[MODE] pc=$%02X:%04X SCMR %02X->%02X (md=%u ht=%u) scbr=%02X rambr=%d\n",
                      m_pbr, m_r[15], m_scmrRaw, value, value & 0x03,
@@ -599,7 +612,7 @@ void GSU::parseScmr(uint8_t value) {
 }
 
 void GSU::parsePor(uint8_t value) {
-    static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+    const bool traceMode = gsuModeTraceEnabled();
     const bool newObj = (value & 0x10) != 0;
     if (traceMode && newObj != m_porObj) {
         std::fprintf(stderr, "[MODE] pc=$%02X:%04X POR.obj %d->%d scbr=%02X rambr=%d\n",
@@ -724,8 +737,10 @@ uint8_t GSU::color(uint8_t source) const {
 }
 
 void GSU::plot(GsuHost& host, uint8_t x, uint8_t y) {
-    static int plotTraceLeft = std::getenv("SNESFOX_GSU_PLOT_TRACE")
-        ? std::atoi(std::getenv("SNESFOX_GSU_PLOT_TRACE")) : 0;
+    static int plotTraceLeft = [] {
+        const char* v = std::getenv("SNESFOX_GSU_PLOT_TRACE");
+        return v ? std::atoi(v) : 0;
+    }();
     if (plotTraceLeft > 0) {
         --plotTraceLeft;
         std::fprintf(stderr, "[PLOT] pc=$%02X:%04X x=%3u y=%3u colr=%02X scbr=%02X\n",
@@ -1283,7 +1298,7 @@ void GSU::insnGETC_RAMB_ROMB(GsuHost& host) {
         m_colr = color(readRomBuffer(host));
     } else if (!m_alt1) {
         syncRamBuffer(host);
-        static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+        const bool traceMode = gsuModeTraceEnabled();
         const bool newRambr = (sr() & 0x01) != 0;
         if (traceMode && newRambr != m_rambr) {
             std::fprintf(stderr, "[MODE] pc=$%02X:%04X RAMBR %d->%d scbr=%02X\n",
@@ -1423,7 +1438,7 @@ void GSU::writeRegister(GsuHost& host, uint16_t addr, uint8_t value) {
         parseCfgr(value);
         return;
     case 0x3038: {
-        static const bool traceMode = std::getenv("SNESFOX_GSU_MODE_TRACE") != nullptr;
+        const bool traceMode = gsuModeTraceEnabled();
         if (traceMode && value != m_scbr) {
             std::fprintf(stderr, "[MODE] pc=$%02X:%04X SCBR %02X->%02X\n", m_pbr, m_r[15], m_scbr, value);
         }

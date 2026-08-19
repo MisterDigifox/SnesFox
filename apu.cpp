@@ -1,7 +1,5 @@
 #include "apu.hpp"
 
-#include <cstdlib>
-
 namespace {
 
 // Official 64-byte IPL ROM (see problemkaputt `fullsnes.txt` — "Boot ROM Disassembly").
@@ -35,13 +33,6 @@ void APU::reset() {
     m_ram[0x00F1] = 0x80;
 
     m_spc.reset();
-
-    if (const char* z = std::getenv("SNESFOX_APU_PORTS_ZERO")) {
-        if (z[0] == '1' && z[1] == '\0') {
-            m_cpuToSpc.fill(0);
-            m_spcToCpu.fill(0);
-        }
-    }
 }
 
 uint8_t APU::readPort(uint16_t addr) const {

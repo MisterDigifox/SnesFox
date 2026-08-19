@@ -771,7 +771,10 @@ void CPU::step(Bus& bus) {
     }
 
     {
-        static int traceLeft = std::getenv("SNESFOX_CPU_TRACE") ? std::atoi(std::getenv("SNESFOX_CPU_TRACE")) : 0;
+        static int traceLeft = [] {
+            const char* v = std::getenv("SNESFOX_CPU_TRACE");
+            return v ? std::atoi(v) : 0;
+        }();
         static bool traceAlways = std::getenv("SNESFOX_CPU_TRACE_ALWAYS") != nullptr;
         if (traceLeft > 0 && bus.hasSuperFx() && (traceAlways || bus.gsu().running())) {
             --traceLeft;
@@ -3322,25 +3325,17 @@ void CPU::step(Bus& bus) {
         m_pc = static_cast<uint16_t>(m_pc + size);
     }
 
-    // cyclesNumber assumes the flat 8-cycle ("Slow") bus baseline; rescale by the speed of
-    // the region the opcode itself was fetched from so FastROM ($420D) actually speeds
-    // things up. (Individual operand/data accesses elsewhere aren't separately timed.)
-    const uint64_t baseCycles = cpuOpcodesTable[m_opcode].cyclesNumber;
-    const unsigned fetchSpeed = bus.accessSpeedCycles(fetchBank, fetchPc);
-    m_cycles += (fetchSpeed == 8) ? baseCycles : (baseCycles * fetchSpeed + 4) / 8;
-
-    // fineCycles: the same total, kept at "×8" (un-rounded) resolution and, for non-indexed
-    // Absolute/DirectPage instructions, with the operand's data access priced at *its* resolved
-    // address's speed rather than assumed to match the opcode fetch's. cycles() alone can't
-    // capture this: rounding to a whole unit *per instruction* throws away exactly the
-    // fractional difference a single fixed-6-cycle I/O access makes against 8-cycle SlowROM
-    // code — small per instruction, but a fully deterministic polling loop (interrupts masked,
-    // no jitter) re-executes the same accesses every pass, so that lost fraction never
-    // accumulates into a real phase shift. Concretely: this is what let Star Frog's
-    // title-screen boot H/V-counter wait (`LDA $2137`/`LDX $213C`, both SlowROM-region code
-    // reading fixed-6-cycle PPU registers) alias onto the same ~44 H-counter values forever,
-    // always skipping the 10-dot window it was waiting for.
-    unsigned operandSpeed = fetchSpeed;
+    // fineCycles: for non-indexed Absolute/DirectPage instructions, prices the operand's data
+    // access at *its* resolved address's speed rather than assuming it matches the opcode
+    // fetch's. cycles() alone can't capture this: rounding to a whole unit *per instruction*
+    // throws away exactly the fractional difference a single fixed-6-cycle I/O access makes
+    // against 8-cycle SlowROM code — small per instruction, but a fully deterministic polling
+    // loop (interrupts masked, no jitter) re-executes the same accesses every pass, so that
+    // lost fraction never accumulates into a real phase shift. Concretely: this is what let
+    // Star Frog's title-screen boot H/V-counter wait (`LDA $2137`/`LDX $213C`, both SlowROM-
+    // region code reading fixed-6-cycle PPU registers) alias onto the same ~44 H-counter values
+    // forever, always skipping the 10-dot window it was waiting for.
+    unsigned operandSpeed = 0;
     unsigned operandAccesses = 1;
     bool hasResolvableOperand = true;
     uint16_t operandAddr = 0;
@@ -3378,6 +3373,22 @@ void CPU::step(Bus& bus) {
             break;
     }
 
+    // Real hardware charges one extra cycle for these addressing modes whenever the accessed
+    // operand is 16 bits wide instead of 8 — a second read()/write() bus cycle for the high
+    // byte, confirmed against ares's WDC65816 core (instructionDirectRead16/instructionBankWrite16
+    // etc. always issue exactly one more read/write call than their 8-bit counterparts). Only
+    // LDX/LDY/STX/STY/CPX/CPY size their memory access off the X flag instead of M — every other
+    // opcode reachable through these addressing modes (LDA/STA/ADC/SBC/CMP/AND/ORA/EOR/BIT/
+    // INC/DEC/ASL/LSR/ROL/ROR/TSB/TRB) is M-flag-sized. cpuOpcodesTable's cyclesNumber for these
+    // modes is always the 8-bit-operand baseline (matching how such tables are conventionally
+    // published), so this extra cycle must be added on top of it here — it previously never
+    // was, silently undercounting every 16-bit-accumulator (or 16-bit-index, for LDX/STX/etc.)
+    // access through these modes by exactly 1 cycle. Given how much native-mode SNES code runs
+    // with M=0, this was a systemic, cumulative timing error, not a one-off edge case: exactly
+    // the kind of "fully deterministic polling loop never converges" or "GSU/CPU handshake
+    // barely stays synchronized" symptom documented throughout this codebase's other
+    // cycle-precision fixes.
+    unsigned extraCycle = 0;
     if (hasResolvableOperand) {
         operandSpeed = bus.accessSpeedCycles(operandBank, operandAddr);
 
@@ -3397,8 +3408,18 @@ void CPU::step(Bus& bus) {
         }
         const bool eightBitOperand = flagSet(m_p, useIndexWidth ? FLAG_X : FLAG_M);
         operandAccesses = eightBitOperand ? 1 : 2;
+        extraCycle = eightBitOperand ? 0 : 1;
     }
 
+    // cyclesNumber assumes the flat 8-cycle ("Slow") bus baseline (plus the 16-bit extra cycle
+    // above); rescale by the speed of the region the opcode itself was fetched from so FastROM
+    // ($420D) actually speeds things up. (Individual operand/data accesses elsewhere aren't
+    // separately timed.)
+    const uint64_t baseCycles = cpuOpcodesTable[m_opcode].cyclesNumber + extraCycle;
+    const unsigned fetchSpeed = bus.accessSpeedCycles(fetchBank, fetchPc);
+    m_cycles += (fetchSpeed == 8) ? baseCycles : (baseCycles * fetchSpeed + 4) / 8;
+
+    if (!hasResolvableOperand) operandSpeed = fetchSpeed;
     if (operandSpeed == fetchSpeed || baseCycles <= operandAccesses) {
         m_fineCycles += baseCycles * fetchSpeed;
     } else {

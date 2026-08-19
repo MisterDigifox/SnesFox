@@ -87,13 +87,17 @@ for e in entries:
    grep/tail rather than trying to read it inline. To find where execution
    is stuck in a loop: grep for a suspected address (`grep -c "02:DCBF\]"`)
    or look for the same handful of addresses repeating forever near the end
-   of the file. `SNESFOX_WRAM_WATCH=<hex>` or `<hexLo>-<hexHi>` (`bus.cpp`)
-   is the complementary tool for "what value does this WRAM address actually
-   hold over time" — it logs every write that lands there (across all
-   bank/mirror combinations that resolve to the same physical byte) as
-   `[WRAM-WATCH #<seq>] bank=XX addr=XXXX <= XX`, which is what proved a
-   CPU-trace-observed "wrong value" was actually the CPU reading the wrong
-   *address*, not the memory holding wrong data.
+   of the file. `SNESFOX_WRAM_WATCH` (a `bus.cpp` write-watchpoint for "what
+   value does this WRAM address actually hold over time," logging every
+   write that landed there across all bank/mirror combinations resolving to
+   the same physical byte) **has since been removed** (it ran on every WRAM
+   write unconditionally, real overhead even when unset) — it's what proved
+   a CPU-trace-observed "wrong value" was actually the CPU reading the wrong
+   *address*, not the memory holding wrong data, in the bug below. If a
+   future session needs this again, `SNESFOX_GSU_RAM_WATCH` (`gsu.cpp`,
+   still present, same syntax, GSU RAM banks `$70`/`$71` only) is the closest
+   surviving analog; re-add an equivalent for main WRAM in `Bus::write` if
+   truly needed rather than assuming `SNESFOX_WRAM_WATCH` still exists.
 
 4. **Cross-reference real addresses against StarFrog's actual source.**
    `./snesfox disasm StarFrog/starfrog.sfc /tmp/out.asm` auto-labels
@@ -265,6 +269,23 @@ early-return or the H-IRQ edge check right after it (both fragile, already caref
 timing bugs documented above). Verified: `selftest` 22/22, `release.sh` round-trip unchanged, and
 the user confirmed input responds correctly in `./snesfox emu` on all three GSU fixtures afterward.
 
+## Known-fixed bug: DirectPage/Absolute(X/Y) missing the +1 cycle for 16-bit accesses (2026-08-19)
+
+Found while chasing the petecube Z-drift below: `cpu.cpp`'s cycle-cost computation used
+`cpuOpcodesTable`'s `cyclesNumber` (the conventional 8-bit-operand baseline, e.g. 4 for `dp,X`)
+unconditionally, never adding the real extra bus cycle every 65816 pays for a 16-bit (M=0, or
+X=0 for `LDX`/`LDY`/`STX`/`STY`/`CPX`/`CPY`) access through `DirectPage`/`DirectPageX`/
+`DirectPageY`/`Absolute`/`AbsoluteX`/`AbsoluteY` — confirmed missing against ares's `WDC65816`
+core (`instructionDirectRead16`/`instructionBankWrite16` etc. always issue exactly one more
+`read()`/`write()` than their 8-bit counterparts). The width-detection logic already existed
+(`hasResolvableOperand`/`operandAccesses`, used to weight `fineCycles`'s fetch/operand-speed
+split) but was never fed back into the actual cycle *count*. Given how much native-mode (M=0)
+code a real SNES program runs, this was a systemic undercount, not an edge case — full details
+and the fix in `CLAUDE.md`'s CPU section. Verified: `selftest` 22/22, `release.sh` round-trip,
+Star3D/StarFox GSU rendering all reconfirmed unaffected. **Only partially explains the Z-drift
+below**: applying it shifted the drift's onset by ~20 frames but did not eliminate it — treat
+the search for what else is still wrong there as unfinished, not superseded by this fix.
+
 ## Known remaining issue (as of 2026-08-19, post-pipeline-fix)
 
 `petesphere`/`petecube` (the title screen's rotating logo object,
@@ -282,13 +303,52 @@ and Mesen2, where it does not drift). `tit_strat` (`endseq.asm`, the
 per-frame half of the title's istrat) calls `s_add_playerz x` every frame —
 a routine that adds the player's current/delta world-Z to the object's world
 Z, presumably so a HUD-anchored object stays at a fixed distance in front of
-a *moving* camera. Since the title screen explicitly zeroes `lastplayz`/
-`pviewposz`/`al_worldz,x` before placing the object and disables player
-control (`pshipflags |= psf_noctrl`), the player's Z should never actually
-change here on real hardware, so `s_add_playerz` should be adding ~0 every
-frame. The likely bug is that something in snesfox causes the tracked
-player-Z (or whatever `s_add_playerz` reads) to drift anyway — not yet
-root-caused; the concrete next step is tracing `al_worldz`/`pviewposz`/
-`lastplayz`/whatever WRAM field holds player Z with `SNESFOX_WRAM_WATCH`
-across frames 250-420 to see which one moves and trace that back to its
-writer, the same method used for every fixed bug above.
+a *moving* camera. The user confirmed this against real bsnes/Mesen2 with the
+*same* `.sfc`, so this is treated as a real `snesfox` bug, not a StarFrog-edit
+artifact.
+
+**Mechanism nailed down precisely** (via static disassembly of `output.asm`
+cross-referenced with targeted `WRAM_WATCH` snapshots — see note below on that
+tool's removal): `s_add_playerz x` compiles to `JSL $1FDC6D`
+(`Func_1FDC6D` = `sr_addplayerZx`, confirmed by 20 distinct call sites across
+the source, matching `s_add_playerZ`'s many callers): `LDA $10,X / CLC / ADC
+$14F6 / STA $10,X / RTL`. `$10,X` (`X=$0444`, constant across every call —
+confirms it's the same object every time) is petecube's `al_worldz` field.
+`$14F6` is `pviewvelz` (confirmed by finding `LDA #$0041 / STA $14F6` sites
+elsewhere plus a self-decay `ADC $14F6`/`STA $14F6` pattern) — it starts at
+**65** early in boot and eases down by ~1 per tick via a chase-toward-target
+routine (`$14FC`=`pviewposz`, the camera's own Z, chasing `$33,X`'s per-object
+target speed). Directly observed via `WRAM_WATCH`: `pviewvelz` decays slowly
+(still 27 by frame 420), while petecube's own `Func_1FDC6D` update only fires
+roughly once per 5 frames (`X` stays `$0444` across calls ~25000 bus-writes
+apart). Meanwhile `pviewposz` (the camera) updates in tight clusters, seemingly
+much more often. **Leading hypothesis**: a rate mismatch between how often the
+camera's own position integrates `pviewvelz` versus how often petecube's
+compensating update runs — the object falls behind (visually: approaches the
+camera) because its catch-up applies less often than the camera's own drift.
+Not yet root-caused to a specific CPU/dispatcher bug.
+
+**A crude decisive-test attempt failed cleanly and was reverted**: clamping
+`$14F6` to 0 on every write (to test "does removing the velocity input stop
+the drift") produced a *worse*, unrelated symptom (`forcedBlank=1` — the whole
+screen blanks by frame 390) rather than a clean "object stops drifting"
+result — clamping a live WRAM value externally fights the game's own
+bookkeeping (other code reads intermediate states expecting gradual change)
+and isn't a safe way to test this. **Next step, not yet done**: find the
+actual dispatcher/scheduling code that decides how often `Func_1FDC6D` fires
+for a given object (petecube's own resume-point coroutine mechanism was
+found — see `$1F:F7A4-F7BD` in a trace, which stores a return `PC`/bank pair
+into the object's own `$16,X`/`$18,X` fields — but the *counter* that gates
+how many dispatcher visits elapse between actual re-entries into that specific
+code block was not found) and check it for a CPU addressing/flag bug matching
+this codebase's established bug pattern, rather than continuing to guess via
+memory-clamping experiments.
+
+**Tooling note**: the `SNESFOX_WRAM_WATCH` write-watchpoint used throughout
+this investigation (and every earlier bug in this file) has since been
+**removed** from `bus.cpp` (it ran unconditionally on every WRAM write, real
+per-write overhead even when disabled). `SNESFOX_GSU_RAM_WATCH` (`gsu.cpp`,
+same syntax, GSU RAM banks `$70`/`$71` only) still exists as the closest
+analog. Re-add an equivalent main-WRAM watchpoint in `Bus::write` if this
+investigation resumes and needs it again — don't assume `SNESFOX_WRAM_WATCH`
+is still there.

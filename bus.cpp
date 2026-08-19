@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <fstream>
 
 // Bridges the ares-derived GSU core to this Bus: GSU RAM ($70/$71) round-trips through
@@ -441,28 +440,11 @@ uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
     return 0x00;
 }
 
-static void debugWramWatch(uint8_t bank, uint16_t addr, uint8_t value) {
-    static const char* watchEnv = std::getenv("SNESFOX_WRAM_WATCH");
-    static uint16_t watchLo = watchEnv ? static_cast<uint16_t>(std::strtol(watchEnv, nullptr, 16)) : 0xFFFF;
-    static uint16_t watchHi = [] {
-        if (!watchEnv) return static_cast<uint16_t>(0xFFFE);
-        const char* dash = std::strchr(watchEnv, '-');
-        return dash ? static_cast<uint16_t>(std::strtol(dash + 1, nullptr, 16))
-                    : static_cast<uint16_t>(std::strtol(watchEnv, nullptr, 16));
-    }();
-    static unsigned long writeSeq = 0;
-    ++writeSeq;
-    if (watchLo != 0xFFFF && addr >= watchLo && addr <= watchHi) {
-        std::fprintf(stderr, "[WRAM-WATCH #%lu] bank=%02X addr=%04X <= %02X\n", writeSeq, bank, addr, value);
-    }
-}
-
 void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     // ------------------------------------------------------------
     // WRAM full banks
     // ------------------------------------------------------------
     if (bank == 0x7E) {
-        debugWramWatch(bank, addr, value);
         m_wram[addr] = value;
         return;
     }
@@ -476,7 +458,6 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     // WRAM mirrors
     // ------------------------------------------------------------
     if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) && addr <= 0x1FFF) {
-        debugWramWatch(bank, addr, value);
         m_wram[addr] = value;
         return;
     }
@@ -486,7 +467,6 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     // ------------------------------------------------------------
     if (m_hasSuperFx) {
         if (bank == 0x70 || bank == 0x71) {
-            debugWramWatch(bank, addr, value);
             m_gsuRam[(static_cast<size_t>(bank - 0x70) << 16) | addr] = value;
             return;
         }
@@ -515,7 +495,6 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
     // WRAM access ports ($2180-$2183)
     // ------------------------------------------------------------
     if (addr == 0x2180) {                          // WMDATA — write + auto-increment
-        if ((m_wramAddr & 0x1FFFF) <= 0x1FFFF) debugWramWatch(0x7E, static_cast<uint16_t>(m_wramAddr & 0xFFFF), value);
         m_wram[m_wramAddr & 0x1FFFF] = value;
         m_wramAddr = (m_wramAddr + 1) & 0x1FFFF;
         return;

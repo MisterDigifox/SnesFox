@@ -618,25 +618,6 @@ int runPpuSnap(const std::string& romPath, uint64_t frames) {
                   << " rms=" << std::sqrt(audioSumSq / static_cast<double>(audioTotal)) << "\n";
     }
 
-    if (const char* dumpPath = std::getenv("SNESFOX_GSU_RAM_DUMP")) {
-        std::ofstream f(dumpPath, std::ios::binary);
-        const auto& ram = bus.gsuWorkRam();
-        f.write(reinterpret_cast<const char*>(ram.data()), static_cast<std::streamsize>(ram.size()));
-    }
-    if (const char* decodedPath = std::getenv("SNESFOX_GSU_RAM_DECODED_DUMP")) {
-        // Exercises the REAL decodeGsuRam (not a reimplementation) and dumps its actual output,
-        // for pixel-for-pixel comparison against an independent reference decode.
-        DebugPanel tmpPanel;
-        decodeGsuRam(bus.gsu(), bus.gsuWorkRam(), bus.ppu().cgram(), tmpPanel.gsuRamArgb,
-                     tmpPanel.gsuRamWidthPx, tmpPanel.gsuRamHeightPx, tmpPanel.gsuRamBpp);
-        std::ofstream f(decodedPath, std::ios::binary);
-        uint16_t hdr[3] = {tmpPanel.gsuRamWidthPx, tmpPanel.gsuRamHeightPx,
-                           static_cast<uint16_t>(tmpPanel.gsuRamBpp)};
-        f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
-        f.write(reinterpret_cast<const char*>(tmpPanel.gsuRamArgb.data()),
-                static_cast<std::streamsize>(tmpPanel.gsuRamArgb.size() * sizeof(uint32_t)));
-    }
-
     const Ppu& p = bus.ppu();
     const uint16_t* v = p.vram();
     const uint8_t nba34 = p.bgNBA34();
@@ -864,8 +845,20 @@ int runCov(const std::string& romPath, const std::string& covPath, uint64_t fram
     return 0;
 }
 
-int runEmu(const std::string& initialRomPath) {
+int runEmu(const std::string& initialRomPath, bool writeTrace = false) {
     printMissingCpuOpcodes(cpuOpcodesTable);
+
+    // --write: dump every 65816 instruction actually executed by the CPU, in order, as
+    // disassembly text, to cpu.asm — a full execution trace rather than a fixed-size ring
+    // buffer like instructionLog below. Opened once for the whole session (truncates any
+    // previous cpu.asm) and reused across ROM swaps via the "Load" button.
+    std::ofstream traceFile;
+    if (writeTrace) {
+        traceFile.open("cpu.asm", std::ios::out | std::ios::trunc);
+        if (!traceFile) {
+            std::cerr << "--write: could not open cpu.asm for writing\n";
+        }
+    }
 
     // Display/audio persist across a ROM swap (the "Load" button) — only the ROM-derived
     // state below gets torn down and rebuilt, same as this function's original one-shot
@@ -971,8 +964,10 @@ int runEmu(const std::string& initialRomPath) {
                 const uint64_t frameStartCycles = cpu.cycles();
 
                 while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
+                    const uint32_t pcBefore = cpu.pc24();
                     cpu.step(bus);
                     advanceCpuScheduling(bus, cpu, true, suppressJoypad);
+                    if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
                 }
                 audio.pump(bus.apu());
             } else if (stepOnce) {
@@ -982,6 +977,7 @@ int runEmu(const std::string& initialRomPath) {
                 cpu.step(bus);
                 advanceCpuScheduling(bus, cpu, true, suppressJoypad);
                 logInstruction(pcBefore);
+                if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
             } else if (nextFrameOnce) {
                 nextFrameOnce = false;
 
@@ -991,6 +987,7 @@ int runEmu(const std::string& initialRomPath) {
                     cpu.step(bus);
                     advanceCpuScheduling(bus, cpu, true, suppressJoypad);
                     logInstruction(pcBefore);
+                    if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
                 }
             }
 
@@ -1017,7 +1014,7 @@ int runEmu(const std::string& initialRomPath) {
 void printUsage() {
     std::cerr << "Usage:\n";
     std::cerr << "  ./snesfox selftest                  # PPU register regression tests (no ROM)\n";
-    std::cerr << "  ./snesfox emu <rom.sfc>\n";
+    std::cerr << "  ./snesfox emu <rom.sfc> [--write]    # --write dumps every executed instruction to cpu.asm\n";
     std::cerr << "  ./snesfox snap <rom.sfc> [frames]   # dump PPU/VRAM heuristics (no SDL)\n";
     std::cerr << "  ./snesfox header <rom.sfc>\n";
     std::cerr << "  ./snesfox cov <rom.sfc> <coverage.out> [frames]\n";
@@ -1043,7 +1040,11 @@ int SnesFoxApp::run(int argc, char** argv) {
     const std::string mode = argv[1];
 
     if (mode == "emu") {
-        return runEmu(argv[2]);
+        bool writeTrace = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::string(argv[i]) == "--write") writeTrace = true;
+        }
+        return runEmu(argv[2], writeTrace);
     }
 
     if (mode == "snap") {
