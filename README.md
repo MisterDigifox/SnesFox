@@ -149,4 +149,5 @@ Designed to round-trip the assembler text produced by `disasm` for supported dum
 
 ## Preview
 
-![snesfox emulator preview](preview/preview.png)
+![snesfox emulator preview](preview/preview1.png)
+![snesfox emulator preview](preview/preview2.png)
