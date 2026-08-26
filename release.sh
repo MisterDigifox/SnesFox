@@ -1,14 +1,19 @@
-#!/bin/bash
+rm snesfox
+rm output.asm
+rm out.sfc
 
-ROM_NAME="hello_world.sfc"
-OUTPUT_ASM="output.asm"
-OUTPUT_ROM="out.sfc"
+clang++ -std=c++20 src/*.cpp src/core/*.cpp src/macOS/*.mm tests/*.cpp imgui/*.cpp imgui/backends/*.cpp -o snesfox \
+  -I. \
+  -Iimgui \
+  -Iimgui/backends \
+  -I/opt/homebrew/opt/sdl2/include \
+  -I/opt/homebrew/opt/sdl2/include/SDL2 \
+  -L/opt/homebrew/opt/sdl2/lib \
+  -lSDL2 \
+  -framework Cocoa \
+  -framework UniformTypeIdentifiers
 
-./build.sh;
-./snesfox disasm $ROM_NAME;
-./snesfox reasm $OUTPUT_ASM $OUTPUT_ROM;
-
-palettes=$(grep -c '^Palette16_' output.asm)
-echo "instr=$(grep -E '^    [A-Z]{2,4}($| )' output.asm | wc -l) dw=$(grep -c '^    \.dw ' output.asm) dl=$(grep -c '^    \.dl ' output.asm) db=$(grep -c '^    \.db ' output.asm) palettes=$palettes colors=$((palettes * 16)) hw_comments=$(grep -c '^    ; .*register access' output.asm) labels=$(grep -Ec '^(L_|Func_|ResetHandler|NativeNMIHandler|NativeIRQHandler|EmuNMIHandler|EmuIRQBRKHandler|EarlyInit_)' output.asm)"
-
-cmp $ROM_NAME $OUTPUT_ROM
+# macOS: ad-hoc codesign avoids some machines killing unsigned local binaries (symptom: zsh: killed).
+if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+  codesign --force -s - ./snesfox 2>/dev/null || true
+fi
