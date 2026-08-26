@@ -32,6 +32,12 @@
 #include "tests/ppu_test.hpp"
 #include "tests/sdsp_test.hpp"
 
+// Window title / app name. Overridden at compile time by release-game-binary.sh
+// (-DSNESFOX_APP_NAME="\"RomName\"") so kiosk builds show the embedded game's name instead.
+#ifndef SNESFOX_APP_NAME
+#define SNESFOX_APP_NAME "snesfox"
+#endif
+
 namespace {
 
 constexpr uint64_t CYCLES_PER_FRAME = Bus::kCyclesPerFrame;
@@ -908,8 +914,12 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool writeGsuTrac
     // Display/audio persist across a ROM swap (the "Load" button) — only the ROM-derived
     // state below gets torn down and rebuilt, same as this function's original one-shot
     // setup used to do exactly once.
-    Display display("snesfox", debugUi);
+    Display display(SNESFOX_APP_NAME, debugUi);
+#ifdef SNESFOX_KIOSK_MODE
+    removeDefaultWindowMenu(); // no File > Open ROM… item either — see release-game-binary.sh
+#else
     installOpenRomMenu(); // native File > Open ROM… menu item, works in both debug and bare mode
+#endif
     AudioOutput audio;
 
     std::string romPath = initialRomPath;

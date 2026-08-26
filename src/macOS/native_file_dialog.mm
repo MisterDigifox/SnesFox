@@ -52,6 +52,21 @@ std::optional<std::string> g_menuOpenRomPath;
 }
 @end
 
+void removeDefaultWindowMenu() {
+    @autoreleasepool {
+        NSMenu* mainMenu = [NSApp mainMenu];
+        if (!mainMenu) return;
+
+        // SDL_Init already installed a default "Window" menu (Minimize/Zoom/Bring All to
+        // Front) — drop it entirely. There is no menu-driven fullscreen toggle anymore
+        // (only the SDLK_F11 key handled directly in display.cpp).
+        NSMenuItem* windowMenuItem = [mainMenu itemWithTitle:@"Window"];
+        if (windowMenuItem) {
+            [mainMenu removeItem:windowMenuItem];
+        }
+    }
+}
+
 void installOpenRomMenu() {
     @autoreleasepool {
         NSMenu* mainMenu = [NSApp mainMenu];
@@ -72,13 +87,7 @@ void installOpenRomMenu() {
         // Index 0 is the app ("snesfox") menu; inserting at 1 puts File right after it.
         [mainMenu insertItem:fileMenuItem atIndex:1];
 
-        // SDL_Init already installed a default "Window" menu (Minimize/Zoom/Bring All to
-        // Front) — drop it entirely. There is no menu-driven fullscreen toggle anymore
-        // (only the SDLK_F11 key handled directly in display.cpp).
-        NSMenuItem* windowMenuItem = [mainMenu itemWithTitle:@"Window"];
-        if (windowMenuItem) {
-            [mainMenu removeItem:windowMenuItem];
-        }
+        removeDefaultWindowMenu();
     }
 }
 
@@ -95,6 +104,8 @@ std::optional<std::string> showOpenRomDialog() {
 }
 
 void installOpenRomMenu() {}
+
+void removeDefaultWindowMenu() {}
 
 std::optional<std::string> takeMenuOpenRomPath() {
     return std::nullopt;

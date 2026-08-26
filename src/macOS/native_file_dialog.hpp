@@ -13,6 +13,13 @@ std::optional<std::string> showOpenRomDialog();
 // showOpenRomDialog() and stashes the result for takeMenuOpenRomPath() to pick up.
 void installOpenRomMenu();
 
+// Removes the default "Window" menu (Minimize/Zoom/Bring All to Front) that SDL_Init installs
+// automatically, without adding File > Open ROM… — used by kiosk-style builds (see
+// SNESFOX_KIOSK_MODE in snesfox_app.cpp) that want a bare Apple-menu-only menu bar. A no-op on
+// non-macOS platforms. installOpenRomMenu() already calls this itself, so builds that call that
+// instead don't need to call this too.
+void removeDefaultWindowMenu();
+
 // Call once per frame from the main loop; returns the path chosen via the File > Open menu
 // item since the last call, or std::nullopt if none was chosen.
 std::optional<std::string> takeMenuOpenRomPath();
