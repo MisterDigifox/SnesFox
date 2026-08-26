@@ -4,7 +4,7 @@ writes a macOS .iconset directory. Colors are pulled from display.cpp's applyMod
 so the icon matches the app's own in-window dark/teal theme.
 
 Usage: tools/make_icon.py <output.iconset dir>
-Then: iconutil -c icns <output.iconset> -o AppIcon.icns  (done by package_app.sh)
+Then: iconutil -c icns <output.iconset> -o AppIcon.icns  (done by release-emu-binary-app.sh)
 """
 import sys
 import os

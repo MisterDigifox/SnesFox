@@ -14,7 +14,7 @@ SnesFox is a SNES emulator that runs your Super Nintendo game ROMs, including Su
 
 ## Installation
 
-Currently macOS-only: `release.sh` invokes `clang++` directly with hardcoded Homebrew paths and links the Cocoa/UniformTypeIdentifiers frameworks — there's no CMake/configure step and no Linux/Windows path yet.
+Currently macOS-only: `release-emu-binary.sh` invokes `clang++` directly with hardcoded Homebrew paths and links the Cocoa/UniformTypeIdentifiers frameworks — there's no CMake/configure step and no Linux/Windows path yet.
 
 ### macOS
 
@@ -32,14 +32,14 @@ Currently macOS-only: `release.sh` invokes `clang++` directly with hardcoded Hom
    brew install sdl2
    ```
 
-   SDL2 is the only external library dependency — Dear ImGui is vendored in-tree under `imgui/` and compiled straight into the binary, so there's nothing to install for it. If Homebrew lives somewhere other than `/opt/homebrew` (e.g. an Intel Mac using `/usr/local`), edit the `-I`/`-L` paths in `release.sh` to match before building.
+   SDL2 is the only external library dependency — Dear ImGui is vendored in-tree under `imgui/` and compiled straight into the binary, so there's nothing to install for it. If Homebrew lives somewhere other than `/opt/homebrew` (e.g. an Intel Mac using `/usr/local`), edit the `-I`/`-L` paths in `release-emu-binary.sh` to match before building.
 
 3. **Build the project** — see [Build](#build) below.
 
 ### Build
 
 ```bash
-./release.sh
+./release-emu-binary.sh
 ```
 
 Compiles every `*.cpp`/`.mm` under `src/`, `src/core/`, and `src/macOS/`, plus `tests/*.cpp` and the vendored `imgui/*.cpp`/`imgui/backends/*.cpp`, in one `clang++ -std=c++20` invocation into the `snesfox` executable at the project root. On macOS the script also applies an **ad hoc codesign** so some systems do not terminate the binary immediately (`zsh: killed`).
@@ -49,7 +49,7 @@ If you still see **`zsh: killed`** after rebuilding, sign manually (`codesign --
 ### macOS app bundle (optional)
 
 ```bash
-./package_app.sh
+./release-emu-binary-app.sh
 open SnesFox.app
 ```
 

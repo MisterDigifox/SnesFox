@@ -1,16 +1,11 @@
 #!/bin/bash
 set -e
 
-# Wraps the already-built ./snesfox CLI binary into a double-clickable SnesFox.app bundle.
-# Launched with no arguments (Finder double-click / `open SnesFox.app`), which is exactly
-# the bare game-only window (see snesfox_app.cpp's argc<2 path) — no ROM loaded yet, use
-# File > Open (or drag a .sfc onto the window/app icon) to pick one.
-
 APP_NAME="SnesFox"
 APP_DIR="${APP_NAME}.app"
 BUNDLE_ID="org.snesfox.emulator"
 
-./release.sh
+./release-emu-binary.sh
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
@@ -93,7 +88,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc codesign the whole bundle (same reasoning as release.sh's raw-binary codesign: avoids
+# Ad-hoc codesign the whole bundle (same reasoning as release-emu-binary.sh's raw-binary codesign: avoids
 # macOS silently killing an unsigned local build).
 if command -v codesign >/dev/null 2>&1; then
   codesign --force --deep -s - "$APP_DIR" 2>/dev/null || true

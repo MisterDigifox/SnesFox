@@ -70,4 +70,6 @@ Testing/
 
 # SnesFox
 snesfox
+snesfoxGame
+src/game/embedded_rom.generated.hpp
 
