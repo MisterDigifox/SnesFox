@@ -12,7 +12,7 @@ xxd -i "$ROM_SRC" \
 
 rm -f "$ROM_NAME"
 
-clang++ -std=c++20 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" src/game/main_game.cpp src/core/*.cpp src/macOS/*.mm tests/*.cpp imgui/*.cpp imgui/backends/*.cpp -o "$ROM_NAME" \
+clang++ -std=c++20 -O2 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" src/game/main_game.cpp src/core/*.cpp src/macOS/*.mm tests/*.cpp imgui/*.cpp imgui/backends/*.cpp -o "$ROM_NAME" \
   -I. \
   -Iimgui \
   -Iimgui/backends \

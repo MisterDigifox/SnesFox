@@ -47,7 +47,7 @@ xxd -i "$ROM_SRC" \
 
 rm -f "$ROM_NAME.exe" SDL2.dll
 
-"$MINGW_CXX" -std=c++20 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" \
+"$MINGW_CXX" -std=c++20 -O2 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" \
   src/game/main_game.cpp src/core/*.cpp src/windows/*.cpp tests/*.cpp imgui/*.cpp imgui/backends/*.cpp \
   -o "$ROM_NAME.exe" \
   -I. \
@@ -61,7 +61,7 @@ rm -f "$ROM_NAME.exe" SDL2.dll
   -lcomdlg32 \
   -static-libgcc -static-libstdc++ -static -lpthread
 
-mkdir Game
+mkdir -p Game
 
 # SDL2.dll is dynamically loaded at runtime — $ROM_NAME.exe won't start without it next to it.
 cp "${SDL2_ROOT}/bin/SDL2.dll" Game/

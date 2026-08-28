@@ -37,7 +37,7 @@ fi
 
 rm -f snesfox.exe SDL2.dll
 
-"$MINGW_CXX" -std=c++20 \
+"$MINGW_CXX" -std=c++20 -O2 \
   src/*.cpp src/core/*.cpp src/windows/*.cpp tests/*.cpp imgui/*.cpp imgui/backends/*.cpp \
   -o snesfox.exe \
   -I. \

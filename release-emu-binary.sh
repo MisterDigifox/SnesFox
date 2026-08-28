@@ -2,7 +2,7 @@ rm snesfox
 rm output.asm
 rm out.sfc
 
-clang++ -std=c++20 src/*.cpp src/core/*.cpp src/macOS/*.mm tests/*.cpp imgui/*.cpp imgui/backends/*.cpp -o snesfox \
+clang++ -std=c++20 -O2 src/*.cpp src/core/*.cpp src/macOS/*.mm tests/*.cpp imgui/*.cpp imgui/backends/*.cpp -o snesfox \
   -I. \
   -Iimgui \
   -Iimgui/backends \
