@@ -9,12 +9,19 @@ static const uint8_t kUnitOffsets[8][4] = {
     {0, 0, 0, 0}, // mode 2: 2 bytes → B+0, B+0
     {0, 0, 1, 1}, // mode 3: 4 bytes → B+0, B+0, B+1, B+1
     {0, 1, 2, 3}, // mode 4: 4 bytes → B+0..B+3
-    {0, 1, 0, 1}, // mode 5: same as 1 (fixed address variant)
+    {0, 1, 0, 1}, // mode 5: 4 bytes → B+0, B+1, B+0, B+1 (2 registers, each written twice)
     {0, 0, 0, 0}, // mode 6: same as 2
     {0, 0, 1, 1}, // mode 7: same as 3
 };
 
-static const uint8_t kUnitSize[8] = { 1, 2, 2, 4, 4, 2, 2, 4 };
+// Bytes transferred per "unit" (matches ares's Channel::hdmaTransfer lengths[] table). Mode 5
+// was previously 2 here — wrong: its 4-entry offset pattern above (B+0,B+1,B+0,B+1) needs all 4
+// consumed per unit, not just the first 2. That truncation only mattered for HDMA (transferOneUnit
+// loops `i < unitSz` and both writes *and* advances the table pointer by unitSz bytes) — general
+// (non-HDMA) DMA loops by the channel's own byte count and indexes via `i % unitSz`, and since the
+// mode-5 offset pattern already repeats with period 2, `i % 2` and `i % 4` produce the same
+// sequence there, so it was never actually wrong for that path.
+static const uint8_t kUnitSize[8] = { 1, 2, 2, 4, 4, 4, 2, 4 };
 
 uint32_t Dma::trigger(uint8_t enableMask, Bus& bus) {
     if (enableMask == 0) return 0;

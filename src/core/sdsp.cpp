@@ -108,6 +108,8 @@ void Sdsp::reset() {
     m_echoBufOffset = 0;
     m_echoOutL = 0;
     m_echoOutR = 0;
+    m_noiseLfsr = 0x4000;
+    m_noiseCounter = 0;
 }
 
 uint8_t Sdsp::peekDataPort() const {
@@ -272,6 +274,59 @@ void Sdsp::updateEnvelope(size_t voiceIndex) {
     }
 }
 
+namespace {
+// Decodes a single BRR nibble into a full-scale sample, updating the running filter state
+// (prev1/prev2) in place. Shared by the real 16-sample block decode and the 2-sample
+// next-block lookahead so both use identical math.
+int16_t decodeBrrNibble(uint8_t packed, bool highNibble, int range, int filter,
+                        int16_t& prev1, int16_t& prev2) {
+    int nibble = highNibble ? (packed >> 4) : (packed & 0x0F);
+    if (nibble >= 8) nibble -= 16;
+
+    // Hardware decodes in a half-scale working domain (this shift-by-1 discards
+    // the LSB, restored by the final <<1 below), not a direct nibble<<range.
+    int sample = 0;
+    if (range <= 12) {
+        sample = (nibble << range) >> 1;
+    } else {
+        sample = nibble < 0 ? -2048 : 0;
+    }
+
+    // p1 = previous decoded (already at full scale); p2 = the one before that,
+    // halved back into this half-scale domain for the filter math.
+    const int p1 = prev1;
+    const int p2 = prev2 >> 1;
+
+    switch (filter) {
+        case 1:
+            sample += p1 >> 1;
+            sample += (-p1) >> 5;
+            break;
+        case 2:
+            sample += p1;
+            sample -= p2;
+            sample += p2 >> 4;
+            sample += (p1 * -3) >> 6;
+            break;
+        case 3:
+            sample += p1;
+            sample -= p2;
+            sample += (p1 * -13) >> 7;
+            sample += (p2 * 3) >> 4;
+            break;
+        default:
+            break;
+    }
+
+    // Hardware clamps this half-scale accumulator to 16 bits, THEN doubles it —
+    // values beyond that wrap via the 16-bit cast rather than saturating again.
+    const int16_t decoded = static_cast<int16_t>(clamp16(sample) << 1);
+    prev2 = prev1;
+    prev1 = decoded;
+    return decoded;
+}
+} // namespace
+
 void Sdsp::decodeBlock(size_t voiceIndex, const std::array<uint8_t, 65536>& aram) {
     Voice& v = m_voices[voiceIndex];
     v.prevBlockLast = v.decoded[15];
@@ -281,50 +336,35 @@ void Sdsp::decodeBlock(size_t voiceIndex, const std::array<uint8_t, 65536>& aram
 
     for (int i = 0; i < 16; ++i) {
         const uint8_t packed = aram[static_cast<uint16_t>(v.brrAddr + 1 + i / 2)];
-        int nibble = (i & 1) == 0 ? (packed >> 4) : (packed & 0x0F);
-        if (nibble >= 8) nibble -= 16;
+        v.decoded[static_cast<size_t>(i)] =
+            decodeBrrNibble(packed, (i & 1) == 0, range, filter, v.prev1, v.prev2);
+    }
 
-        // Hardware decodes in a half-scale working domain (this shift-by-1 discards
-        // the LSB, restored by the final <<1 below), not a direct nibble<<range.
-        int sample = 0;
-        if (range <= 12) {
-            sample = (nibble << range) >> 1;
-        } else {
-            sample = nibble < 0 ? -2048 : 0;
-        }
-
-        // p1 = previous decoded (already at full scale); p2 = the one before that,
-        // halved back into this half-scale domain for the filter math.
-        const int p1 = v.prev1;
-        const int p2 = v.prev2 >> 1;
-
-        switch (filter) {
-            case 1:
-                sample += p1 >> 1;
-                sample += (-p1) >> 5;
-                break;
-            case 2:
-                sample += p1;
-                sample -= p2;
-                sample += p2 >> 4;
-                sample += (p1 * -3) >> 6;
-                break;
-            case 3:
-                sample += p1;
-                sample -= p2;
-                sample += (p1 * -13) >> 7;
-                sample += (p2 * 3) >> 4;
-                break;
-            default:
-                break;
-        }
-
-        // Hardware clamps this half-scale accumulator to 16 bits, THEN doubles it —
-        // values beyond that wrap via the 16-bit cast rather than saturating again.
-        const int16_t decoded = static_cast<int16_t>(clamp16(sample) << 1);
-        v.decoded[static_cast<size_t>(i)] = decoded;
-        v.prev2 = v.prev1;
-        v.prev1 = decoded;
+    // Eagerly decode the first 2 samples of whichever block follows this one (mirroring
+    // advanceVoice's end/loop address logic below), continuing the same running filter
+    // state, so mixOneSample's gaussian interpolation always has real decoded history to
+    // read near the block's tail (idx==14/15) instead of repeating the last sample. Real
+    // hardware's 12-sample ring buffer never distinguishes "this block" from "the next
+    // one" for interpolation purposes, so it never needs to repeat — a fixed per-block
+    // array that resets at each boundary was introducing a small periodic discontinuity
+    // every 16 samples. That's inaudible for a short one-shot sound (a handful of blocks)
+    // but on a long sustained/multi-thousand-block sample the same small artifact repeats
+    // at the block-transition rate (roughly 1-1.5kHz for typical pitches), which is exactly
+    // the audible "grésillement" reported on LT_Gourmet's long sustained bass/pad voice.
+    // Skipped only when this block truly ends without looping (no valid next block exists —
+    // the voice deactivates before that stale preview would ever be read).
+    const bool end = (v.brrHeader & 0x01) != 0;
+    const bool loop = (v.brrHeader & 0x02) != 0;
+    if (!(end && !loop)) {
+        const uint16_t nextAddr = end ? v.loopAddr : static_cast<uint16_t>(v.brrAddr + 9);
+        const uint8_t nextHeader = aram[nextAddr];
+        const int nextRange = (nextHeader >> 4) & 0x0F;
+        const int nextFilter = (nextHeader >> 2) & 0x03;
+        const uint8_t nextPacked = aram[static_cast<uint16_t>(nextAddr + 1)];
+        int16_t previewPrev1 = v.prev1;
+        int16_t previewPrev2 = v.prev2;
+        v.nextPreview[0] = decodeBrrNibble(nextPacked, true, nextRange, nextFilter, previewPrev1, previewPrev2);
+        v.nextPreview[1] = decodeBrrNibble(nextPacked, false, nextRange, nextFilter, previewPrev1, previewPrev2);
     }
 }
 
@@ -362,16 +402,35 @@ void Sdsp::advanceVoice(size_t voiceIndex, const std::array<uint8_t, 65536>& ara
     }
 }
 
+// Shared 15-bit LFSR feeding any voice with its NON bit set, in place of that voice's
+// BRR sample. Feedback bit = (lfsr.bit1 XOR lfsr.bit0), shifted into bit14; the rest of
+// the register shifts right by one. Advances once per output sample, at the rate FLG's
+// low 5 bits (NCK) select from the same period table the envelope rate fields use.
+void Sdsp::updateNoise() {
+    const int freq = m_regs[static_cast<size_t>(r_flg)] & 0x1F;
+    const int period = kRateTable[freq];
+    if (period == 0) return; // rate 0 => frozen (never triggers)
+
+    ++m_noiseCounter;
+    if (m_noiseCounter < period) return;
+    m_noiseCounter = 0;
+
+    const int feedback = ((m_noiseLfsr << 13) ^ (m_noiseLfsr << 14)) & 0x4000;
+    m_noiseLfsr = static_cast<uint16_t>((feedback | (m_noiseLfsr >> 1)) & 0x7FFF);
+}
+
 void Sdsp::mixOneSample(std::array<uint8_t, 65536>& aram) {
     if ((m_regs[static_cast<size_t>(r_flg)] & 0x80) != 0) {
         keyOff(0xFF);
     }
+    updateNoise();
 
     int left = 0;
     int right = 0;
     int dryEchoL = 0;
     int dryEchoR = 0;
     const uint8_t eon = m_regs[static_cast<size_t>(r_eon)];
+    const uint8_t non = m_regs[static_cast<size_t>(r_non)];
     for (size_t i = 0; i < kVoices; ++i) {
         Voice& v = m_voices[i];
         if (!v.active) continue;
@@ -383,16 +442,23 @@ void Sdsp::mixOneSample(std::array<uint8_t, 65536>& aram) {
 
         // Real hardware's 4-tap Gaussian interpolation (see gaussianTable/gaussianInterpolate
         // above) between the two samples straddling the fractional position left over in the
-        // pitch counter, with one sample of lookback/lookahead on each side. p2/p3 fall back to
-        // repeating the last available sample at a block boundary rather than reading ahead into
-        // the not-yet-decoded next block — a small residual approximation distinct from the
-        // interpolation curve itself.
-        const int idx = v.sampleIndex;
-        const int p1 = v.decoded[idx];
-        const int p0 = (idx >= 1) ? v.decoded[idx - 1] : v.prevBlockLast;
-        const int p2 = (idx < 15) ? v.decoded[idx + 1] : p1;
-        const int p3 = (idx < 14) ? v.decoded[idx + 2] : p2;
-        const int sample = gaussianInterpolate(p0, p1, p2, p3, v.pitchCounter);
+        // pitch counter, with one sample of lookback/lookahead on each side. p2/p3 near the
+        // block's tail (idx==14/15) come from decodeBlock()'s eagerly-decoded next-block
+        // preview rather than repeating the last sample — see its doc comment.
+        int sample;
+        if ((non & (1u << i)) != 0) {
+            // NON selects the shared noise LFSR in place of this voice's BRR sample;
+            // BRR playback position still advances underneath (advanceVoice below is
+            // unconditional), matching real hardware.
+            sample = static_cast<int16_t>(static_cast<uint16_t>(m_noiseLfsr << 1));
+        } else {
+            const int idx = v.sampleIndex;
+            const int p1 = v.decoded[idx];
+            const int p0 = (idx >= 1) ? v.decoded[idx - 1] : v.prevBlockLast;
+            const int p2 = (idx < 15) ? v.decoded[idx + 1] : v.nextPreview[0];
+            const int p3 = (idx < 14) ? v.decoded[idx + 2] : (idx == 14 ? v.nextPreview[0] : v.nextPreview[1]);
+            sample = gaussianInterpolate(p0, p1, p2, p3, v.pitchCounter);
+        }
 
         updateEnvelope(i);
         const int enveloped = (sample * v.envLevel) >> 11;
@@ -404,11 +470,13 @@ void Sdsp::mixOneSample(std::array<uint8_t, 65536>& aram) {
         const int vr = signedReg(m_regs[static_cast<size_t>(voiceReg(i, 0x01))]);
         const int chL = (enveloped * vl) / 128;
         const int chR = (enveloped * vr) / 128;
-        left += chL;
-        right += chR;
-        if ((eon & (1u << i)) != 0) {
-            dryEchoL += chL;
-            dryEchoR += chR;
+        if (m_soloVoice < 0 || m_soloVoice == static_cast<int>(i)) {
+            left += chL;
+            right += chR;
+            if ((eon & (1u << i)) != 0) {
+                dryEchoL += chL;
+                dryEchoR += chR;
+            }
         }
 
         advanceVoice(i, aram);

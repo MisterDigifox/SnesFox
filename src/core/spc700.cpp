@@ -2054,13 +2054,18 @@ uint32_t Spc700::step(APU& apu) {
             return 8;
 
         case 0xFE: { // DBNZ Y,rel — decrement Y then branch back if nonzero (flags unaffected).
+            // Real hardware: opcode fetch + dummy PC read + idle + displacement fetch = 4
+            // cycles baseline, plus 2 more idle cycles only when the branch is actually
+            // taken (6 total) — confirmed against ares's SMP core
+            // (instructionBranchNotYDecrement: read(PC)+idle()+fetch() always, then two
+            // more idle()s gated on the branch condition).
             --m_y;
             const int8_t rel = static_cast<int8_t>(fetchPc(apu));
             if (m_y != 0) {
                 m_pc = spcPcPlusRel(m_pc, rel);
-                return 4;
+                return 6;
             }
-            return 2;
+            return 4;
         }
 
         case 0xFF: { // STOP — normally driver exit; halt so we avoid burning host CPU.

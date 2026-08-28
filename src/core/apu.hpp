@@ -24,6 +24,7 @@ public:
     size_t popAudioSamples(Sdsp::PcmFrame* out, size_t maxFrames);
     [[nodiscard]] const Sdsp& dsp() const { return m_sdsp; }
     [[nodiscard]] const std::array<uint8_t, 65536>& ram() const { return m_ram; }
+    void setSoloVoice(int voice) { m_sdsp.setSoloVoice(voice); }
 
     uint8_t spcPeek(uint16_t addr);
     void    spcPoke(uint16_t addr, uint8_t value);

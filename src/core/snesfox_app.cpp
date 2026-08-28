@@ -18,12 +18,14 @@
 
 #include <SDL2/SDL.h>
 
+#include "audio_output.hpp"
 #include "bus.hpp"
 #include "cpu.hpp"
 #include "display.hpp"
 #include "gsu_disasm.hpp"
 #include "disasm_dump.hpp"
 #include "header.hpp"
+#include "input.hpp"
 #include "../macOS/native_file_dialog.hpp"
 #include "opcodes.hpp"
 #include "reasm.hpp"
@@ -45,50 +47,6 @@ constexpr uint64_t CYCLES_PER_FRAME = Bus::kCyclesPerFrame;
 // of cycles (matching the CLAUDE.md-documented 8-cycle SlowROM access cost), rather than a
 // full frame — enough to see S-DSP Voices/ARAM change by a small, watchable increment.
 constexpr uint64_t APU_MANUAL_STEP_CYCLES = 8;
-constexpr int AUDIO_SAMPLE_RATE = 32000;
-constexpr int AUDIO_CHANNELS = 2;
-constexpr int AUDIO_QUEUE_LOW_FRAMES = AUDIO_SAMPLE_RATE / 30;
-constexpr int AUDIO_QUEUE_MAX_FRAMES = AUDIO_SAMPLE_RATE / 4;
-
-uint16_t sampleJoy1(bool suppress) {
-    if (suppress) return 0;
-    SDL_PumpEvents();
-    const uint8_t* k = SDL_GetKeyboardState(nullptr);
-    uint16_t joy = 0;
-    if (k[SDL_SCANCODE_B]) joy |= 0x8000; // B
-    if (k[SDL_SCANCODE_Y]) joy |= 0x4000; // Y
-    if (k[SDL_SCANCODE_SPACE]) joy |= 0x2000; // Select
-    if (k[SDL_SCANCODE_RETURN]) joy |= 0x1000; // Start
-    if (k[SDL_SCANCODE_UP]) joy |= 0x0800; // Up
-    if (k[SDL_SCANCODE_DOWN]) joy |= 0x0400; // Down
-    if (k[SDL_SCANCODE_LEFT]) joy |= 0x0200; // Left
-    if (k[SDL_SCANCODE_RIGHT]) joy |= 0x0100; // Right
-    if (k[SDL_SCANCODE_A]) joy |= 0x0080; // A
-    if (k[SDL_SCANCODE_X]) joy |= 0x0040; // X
-    if (k[SDL_SCANCODE_L]) joy |= 0x0020; // L
-    if (k[SDL_SCANCODE_R]) joy |= 0x0010; // R
-    return joy;
-}
-
-uint16_t sampleJoy2(bool suppress) {
-    if (suppress) return 0;
-    SDL_PumpEvents();
-    const uint8_t* k = SDL_GetKeyboardState(nullptr);
-    uint16_t joy = 0;
-    if (k[SDL_SCANCODE_2]) joy |= 0x8000; // B
-    if (k[SDL_SCANCODE_4]) joy |= 0x4000; // Y
-    if (k[SDL_SCANCODE_RSHIFT]) joy |= 0x2000; // Select
-    if (k[SDL_SCANCODE_RETURN]) joy |= 0x1000; // Start
-    if (k[SDL_SCANCODE_7]) joy |= 0x0800; // Up
-    if (k[SDL_SCANCODE_8]) joy |= 0x0400; // Down
-    if (k[SDL_SCANCODE_9]) joy |= 0x0200; // Left
-    if (k[SDL_SCANCODE_0]) joy |= 0x0100; // Right
-    if (k[SDL_SCANCODE_1]) joy |= 0x0080; // A
-    if (k[SDL_SCANCODE_3]) joy |= 0x0040; // X
-    if (k[SDL_SCANCODE_5]) joy |= 0x0020; // L
-    if (k[SDL_SCANCODE_6]) joy |= 0x0010; // R
-    return joy;
-}
 
 constexpr int LOG_SIZE = 4;
 
@@ -114,86 +72,6 @@ inline void advanceCpuScheduling(Bus& bus, CPU& cpu, bool updateJoyOnNmi, bool s
     }
     bus.syncWaiAfterVblankEdge(cpu);
 }
-
-class AudioOutput {
-public:
-    AudioOutput() {
-        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
-            std::cerr << "SDL audio disabled: " << SDL_GetError() << "\n";
-            return;
-        }
-
-        SDL_AudioSpec want{};
-        want.freq = AUDIO_SAMPLE_RATE;
-        want.format = AUDIO_S16SYS;
-        want.channels = AUDIO_CHANNELS;
-        want.samples = 1024;
-
-        SDL_AudioSpec have{};
-        m_device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
-        if (m_device == 0) {
-            std::cerr << "SDL audio disabled: " << SDL_GetError() << "\n";
-            SDL_QuitSubSystem(SDL_INIT_AUDIO);
-            return;
-        }
-        if (have.freq != want.freq || have.format != want.format || have.channels != want.channels) {
-            std::cerr << "SDL audio disabled: unsupported device format\n";
-            SDL_CloseAudioDevice(m_device);
-            m_device = 0;
-            SDL_QuitSubSystem(SDL_INIT_AUDIO);
-            return;
-        }
-
-        SDL_PauseAudioDevice(m_device, 0);
-    }
-
-    ~AudioOutput() {
-        if (m_device != 0) {
-            SDL_CloseAudioDevice(m_device);
-            SDL_QuitSubSystem(SDL_INIT_AUDIO);
-        }
-    }
-
-    AudioOutput(const AudioOutput&) = delete;
-    AudioOutput& operator=(const AudioOutput&) = delete;
-
-    void setPaused(bool paused) {
-        if (m_device == 0) return;
-        SDL_PauseAudioDevice(m_device, paused ? 1 : 0);
-        if (paused) {
-            SDL_ClearQueuedAudio(m_device);
-        }
-    }
-
-    void clearQueue() {
-        if (m_device == 0) return;
-        SDL_ClearQueuedAudio(m_device);
-    }
-
-    void pump(APU& apu) {
-        if (m_device == 0) return;
-
-        const uint32_t queuedBytes = SDL_GetQueuedAudioSize(m_device);
-        const uint32_t frameBytes = static_cast<uint32_t>(sizeof(Sdsp::PcmFrame));
-        const uint32_t queuedFrames = queuedBytes / frameBytes;
-        if (queuedFrames > AUDIO_QUEUE_MAX_FRAMES) {
-            SDL_ClearQueuedAudio(m_device);
-        }
-        if (queuedFrames >= AUDIO_QUEUE_LOW_FRAMES) return;
-
-        std::array<Sdsp::PcmFrame, 2048> frames{};
-        const size_t n = apu.popAudioSamples(frames.data(), frames.size());
-        if (n == 0) return;
-
-        const uint32_t bytes = static_cast<uint32_t>(n * sizeof(Sdsp::PcmFrame));
-        if (SDL_QueueAudio(m_device, frames.data(), bytes) != 0) {
-            std::cerr << "SDL_QueueAudio failed: " << SDL_GetError() << "\n";
-        }
-    }
-
-private:
-    SDL_AudioDeviceID m_device = 0;
-};
 
 std::string trimCopy(std::string s) {
     auto notSpace = [](unsigned char c) { return !std::isspace(c); };
