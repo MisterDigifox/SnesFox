@@ -884,7 +884,7 @@ int runCov(const std::string& romPath, const std::string& covPath, uint64_t fram
     return 0;
 }
 
-int runEmu(const std::string& initialRomPath, bool writeTrace, bool writeGsuTrace, bool debugUi) {
+int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
     printMissingCpuOpcodes(cpuOpcodesTable);
 
     // --log-cpu: dump every 65816 instruction actually executed by the CPU, in order, as
@@ -896,18 +896,6 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool writeGsuTrac
         traceFile.open("cpu.asm", std::ios::out | std::ios::trunc);
         if (!traceFile) {
             std::cerr << "--log-cpu: could not open cpu.asm for writing\n";
-        }
-    }
-
-    // --log-gsu: same idea as --log-cpu, but for every GSU instruction executed while SFR.GO
-    // is set, to gsu.asm — via GSU::setTraceFile (gsu.cpp), the unbounded twin of the
-    // fixed-size debugLogEntry() ring buffer the live UI panel uses. Re-armed on each ROM
-    // (re)load below since a new Bus/GSU instance is constructed then.
-    std::FILE* gsuTraceFile = nullptr;
-    if (writeGsuTrace) {
-        gsuTraceFile = std::fopen("gsu.asm", "w");
-        if (!gsuTraceFile) {
-            std::cerr << "--log-gsu: could not open gsu.asm for writing\n";
         }
     }
 
@@ -935,7 +923,6 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool writeGsuTrac
             while (waitingForRom) {
                 DebugAction action = DebugAction::None;
                 if (!display.processEvents(action)) {
-                    if (gsuTraceFile) std::fclose(gsuTraceFile);
                     return 0;
                 }
 
@@ -980,7 +967,6 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool writeGsuTrac
 
         Bus bus(data, savePath);
         bus.reset();
-        if (gsuTraceFile) bus.gsu().setTraceFile(gsuTraceFile);
 
         CPU cpu;
         cpu.reset(bus, resetVector);
@@ -1108,7 +1094,6 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool writeGsuTrac
         }
 
         if (!loadRequested) {
-            if (gsuTraceFile) std::fclose(gsuTraceFile);
             return 0;
         }
         // else: loop back to the top of the for(;;) with the new romPath from Load.
@@ -1119,7 +1104,7 @@ void printUsage() {
     std::cerr << "Usage:\n";
     std::cerr << "  ./snesfox selftest                  # PPU register regression tests (no ROM)\n";
     std::cerr << "  ./snesfox [rom.sfc]                 # bare game-only window, no toolbar/panels; omit rom.sfc for an empty screen with no way to load one\n";
-    std::cerr << "  ./snesfox --debug [rom.sfc] [--log-cpu] [--log-gsu]  # full debug UI (toolbar, panels, Load button); --log-cpu/--log-gsu dump every executed CPU/GSU instruction to cpu.asm/gsu.asm\n";
+    std::cerr << "  ./snesfox --debug [rom.sfc] [--log-cpu]  # full debug UI (toolbar, panels, Load button); --log-cpu dumps every executed CPU instruction to cpu.asm\n";
     std::cerr << "  ./snesfox snap <rom.sfc> [frames]   # dump PPU/VRAM heuristics (no SDL)\n";
     std::cerr << "  ./snesfox header <rom.sfc>\n";
     std::cerr << "  ./snesfox cov <rom.sfc> <coverage.out> [frames]\n";
@@ -1143,7 +1128,7 @@ int SnesFoxApp::run(int argc, char** argv) {
 
     const bool debugUi = argc >= 2 && std::string(argv[1]) == "--debug";
 
-    // `./snesfox --debug [rom.sfc] [--log-cpu] [--log-gsu]` opens the full debug UI (side
+    // `./snesfox --debug [rom.sfc] [--log-cpu]` opens the full debug UI (side
     // panels, toolbar, Load button). Anything else that isn't a recognized subcommand opens
     // a bare game-only window instead: `./snesfox` alone shows an empty screen with no way
     // to load a ROM (no toolbar to click Load from — use --debug for that), while
@@ -1153,12 +1138,10 @@ int SnesFoxApp::run(int argc, char** argv) {
                                              : ((argc >= 2) ? argv[1] : "");
         const int flagsStart = debugUi ? ((argc >= 3) ? 3 : 2) : 2;
         bool writeTrace = false;
-        bool writeGsuTrace = false;
         for (int i = flagsStart; i < argc; ++i) {
             if (std::string(argv[i]) == "--log-cpu") writeTrace = true;
-            if (std::string(argv[i]) == "--log-gsu") writeGsuTrace = true;
         }
-        return runEmu(romPath, writeTrace, writeGsuTrace, debugUi);
+        return runEmu(romPath, writeTrace, debugUi);
     }
 
     const std::string mode = argv[1];

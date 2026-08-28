@@ -99,12 +99,6 @@ public:
     static void setTrace(bool enabled) { s_trace = enabled; }
     static bool traceEnabled() { return s_trace; }
 
-    // --log-gsu (snesfox_app.cpp): when set, every instruction executed while SFR.GO is set
-    // is disassembled and written here as it runs — unlike debugLogEntry() above (a fixed
-    // kDebugLogSize ring buffer for the live UI panel), this has no size limit, so it's the
-    // right hook for a full-session GSU execution trace. Not owned: caller opens/closes the file.
-    void setTraceFile(std::FILE* file) { m_traceFile = file; }
-
 private:
     static constexpr size_t kCacheSize = 0x0200;
     static constexpr uint64_t kMaxStepsPerRun = 1048576;
@@ -254,7 +248,6 @@ private:
     std::array<DebugLogEntry, kDebugLogSize> m_debugLog{};
     size_t m_debugLogPos = 0;
     size_t m_debugLogCount = 0;
-    std::FILE* m_traceFile = nullptr;
     bool m_z = false;
     bool m_s = false;
     bool m_cy = false;

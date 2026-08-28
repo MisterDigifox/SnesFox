@@ -193,7 +193,6 @@ private:
 
     std::array<uint32_t, 256 * 224> m_framebuffer{};
     mutable bool m_objRangeOver = false; // set when >32 sprites on a scanline
-    bool         m_diagDone     = false; // one-shot first-active-frame diagnostic
     uint8_t      m_debugLayerDisable = 0; // bit0-3 = BG0-3, bit4 = OAM (debug UI override)
     uint32_t     m_vramWrites   = 0;    // total VRAM word writes (incremented per $2118/$2119 pair)
 

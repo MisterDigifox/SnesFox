@@ -1,7 +1,6 @@
 #include "ppu.hpp"
 #include <algorithm>
 #include <array>
-#include <cstdio>
 #include <cstring>
 
 // -----------------------------------------------------------------------
@@ -59,7 +58,6 @@ void Ppu::reset() {
     m_fixedR = m_fixedG = m_fixedB = 0;
 
     m_setini     = 0;
-    m_diagDone   = false;
     m_vramWrites = 0;
 }
 
@@ -1146,40 +1144,6 @@ void Ppu::renderScanline(int line) {
         return;
     }
 
-
-    // One-shot diagnostic: print PPU state on the very first active scanline
-    if (!m_diagDone && line == 0) {
-        m_diagDone = true;
-        const uint16_t chr1 = static_cast<uint16_t>((m_bgNBA[0] & 0x0F) * 0x1000);
-        const uint16_t tm1  = static_cast<uint16_t>((m_bgSC[0] >> 2) * 0x400);
-        const uint16_t chr3 = chrBase(2);
-        const uint16_t tm3  = static_cast<uint16_t>((m_bgSC[2] >> 2) * 0x400);
-        std::fprintf(stderr,
-            "[PPU diag] First active frame:\n"
-            "  bgMode=%u  tm=$%02X  ts=$%02X  bg3pri=%u  vramWrites=%u\n"
-            "  TM: BG1=%u BG2=%u BG3=%u OBJ=%u\n"
-            "  bgSC=%02X %02X %02X %02X  bgNBA=%02X %02X\n"
-            "  BG1 CHR@%04X: %04X %04X %04X %04X\n"
-            "  BG1 TM@%04X:  %04X %04X %04X %04X\n"
-            "  BG3 CHR@%04X: %04X %04X %04X %04X\n"
-            "  BG3 TM@%04X:  %04X %04X %04X %04X\n",
-            m_bgMode, m_tm, m_ts, (unsigned)m_bg3Priority, m_vramWrites,
-            (m_tm >> 0) & 1, (m_tm >> 1) & 1, (m_tm >> 2) & 1, (m_tm >> 4) & 1,
-            m_bgSC[0], m_bgSC[1], m_bgSC[2], m_bgSC[3],
-            m_bgNBA[0], m_bgNBA[1],
-            chr1,
-            m_vram[(chr1+0)&0x7FFF], m_vram[(chr1+1)&0x7FFF],
-            m_vram[(chr1+2)&0x7FFF], m_vram[(chr1+3)&0x7FFF],
-            tm1,
-            m_vram[(tm1+0)&0x7FFF], m_vram[(tm1+1)&0x7FFF],
-            m_vram[(tm1+2)&0x7FFF], m_vram[(tm1+3)&0x7FFF],
-            chr3,
-            m_vram[(chr3+0)&0x7FFF], m_vram[(chr3+1)&0x7FFF],
-            m_vram[(chr3+2)&0x7FFF], m_vram[(chr3+3)&0x7FFF],
-            tm3,
-            m_vram[(tm3+0)&0x7FFF], m_vram[(tm3+1)&0x7FFF],
-            m_vram[(tm3+2)&0x7FFF], m_vram[(tm3+3)&0x7FFF]);
-    }
 
     // Per-layer pixel buffers (TM | TS renders — split into main/sub composites below)
     LayerPixel  bg0[256]{}, bg1[256]{}, bg2[256]{}, bg3[256]{};

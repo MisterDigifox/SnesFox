@@ -146,8 +146,7 @@ private:
     mutable uint32_t m_wramAddr = 0; // 17-bit address (0-0x1FFFF)
 
     // DMA / HDMA ($420C write-only latch)
-    uint8_t m_dmaTraceCount = 0;
-    uint8_t m_reg420c       = 0;
+    uint8_t m_reg420c = 0;
 
     // MEMSEL ($420D) — bit0 selects FastROM (6-cycle) vs SlowROM (8-cycle) access
     // for banks 00-3F/80-BF upper half and C0-FF.
