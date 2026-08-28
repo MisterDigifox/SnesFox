@@ -14,7 +14,7 @@ SnesFox is a SNES emulator that runs your Super Nintendo game ROMs, including Su
 
 ## Installation
 
-Currently macOS-only: `release-emu-binary.sh` invokes `clang++` directly with hardcoded Homebrew paths and links the Cocoa/UniformTypeIdentifiers frameworks — there's no CMake/configure step and no Linux/Windows path yet.
+Native builds are macOS-only: `release-emu-binary.sh` invokes `clang++` directly with hardcoded Homebrew paths and links the Cocoa/UniformTypeIdentifiers frameworks — there's no CMake/configure step and no Linux path yet. A Windows binary is available too, built by cross-compiling from macOS/Linux with mingw-w64 — see [Windows](#windows-cross-compiled) below.
 
 ### macOS
 
@@ -34,26 +34,73 @@ Currently macOS-only: `release-emu-binary.sh` invokes `clang++` directly with ha
 
    SDL2 is the only external library dependency — Dear ImGui is vendored in-tree under `imgui/` and compiled straight into the binary, so there's nothing to install for it. If Homebrew lives somewhere other than `/opt/homebrew` (e.g. an Intel Mac using `/usr/local`), edit the `-I`/`-L` paths in `release-emu-binary.sh` to match before building.
 
-3. **Build the project** — see [Build](#build) below.
+3. **Build the project** — see [macOS binary](#macos-binary) below.
 
-### Build
+### Windows
+
+There's no native Windows toolchain path — instead, `release-emu-binary-windows.sh` cross-compiles `snesfox.exe` from macOS (or Linux) using mingw-w64.
+
+1. **Install mingw-w64:**
+
+   ```bash
+   brew install mingw-w64
+   ```
+
+2. **Build the project** — see [Windows executable](#windows-executable) below.
+
+## How to build the emulator
+
+### macOS binary
 
 ```bash
 ./release-emu-binary.sh
 ```
 
-Compiles every `*.cpp`/`.mm` under `src/`, `src/core/`, and `src/macOS/`, plus `tests/*.cpp` and the vendored `imgui/*.cpp`/`imgui/backends/*.cpp`, in one `clang++ -std=c++20` invocation into the `snesfox` executable at the project root. On macOS the script also applies an **ad hoc codesign** so some systems do not terminate the binary immediately (`zsh: killed`).
-
-If you still see **`zsh: killed`** after rebuilding, sign manually (`codesign --force -s - ./snesfox`), clear quarantine (`xattr -cr ./snesfox`), or check corporate antivirus / SIP logs.
-
-### macOS app bundle (optional)
+### macOS app
 
 ```bash
 ./release-emu-binary-app.sh
 open SnesFox.app
 ```
 
-Wraps the built `snesfox` binary into a double-clickable `SnesFox.app` (procedurally-drawn icon, ad hoc codesigned). Launched with no arguments this opens the same bare game-only window as `./snesfox` with no ROM loaded — pick one via **File > Open ROM…** (`Cmd+O`), drag a `.sfc`/`.smc` onto the window or app icon, or double-click a ROM in Finder (registered via the bundle's `Info.plist`).
+### Windows executable
+
+```bash
+./release-emu-binary-windows.sh
+```
+
+## How to build a game embedded in the emulator
+
+### macOS binary
+
+```bash
+./release-game-binary.sh
+```
+
+Builds `./Transparency` (or whatever `ROM_NAME` is set to) at the project root, same
+prerequisites as the [macOS emulator binary](#macos-binary) above.
+
+### macOS app
+
+```bash
+./release-game-app.sh
+open Transparency.app
+```
+
+Wraps the game binary into a double-clickable `.app` bundle (procedurally-drawn icon, ad
+hoc codesigned) — same packaging `release-emu-binary-app.sh` does for the emulator, but
+without the ROM file-association `Info.plist` entries since there's no ROM to pick.
+
+### Windows executable
+
+```bash
+./release-game-binary-windows.sh
+```
+
+Cross-compiles `Transparency.exe` the same way `release-emu-binary-windows.sh` cross-compiles
+`snesfox.exe` (mingw-w64, downloaded/cached SDL2, `src/windows/native_file_dialog.cpp`,
+statically-linked runtime) — same [Windows prerequisites](#windows) apply. Ship the produced
+`.exe` together with the `SDL2.dll` copied alongside it.
 
 ## Usage
 
