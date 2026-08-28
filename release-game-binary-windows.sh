@@ -61,7 +61,11 @@ rm -f "$ROM_NAME.exe" SDL2.dll
   -lcomdlg32 \
   -static-libgcc -static-libstdc++ -static -lpthread
 
+mkdir Game
+
 # SDL2.dll is dynamically loaded at runtime — $ROM_NAME.exe won't start without it next to it.
-cp "${SDL2_ROOT}/bin/SDL2.dll" .
+cp "${SDL2_ROOT}/bin/SDL2.dll" Game/
+
+mv "${ROM_NAME}.exe" Game/
 
 echo "Built $ROM_NAME.exe — ship it together with SDL2.dll (copied alongside it here)."
