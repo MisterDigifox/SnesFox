@@ -22,7 +22,6 @@ constexpr uint64_t DEFAULT_COV_FRAMES = 600;
 
 void printUsage() {
     std::cerr << "Usage:\n";
-    std::cerr << "  ./snesfox selftest                  # PPU register regression tests (no ROM)\n";
     std::cerr << "  ./snesfox [rom.sfc]                 # bare game-only window, no toolbar/panels; omit rom.sfc for an empty screen with no way to load one\n";
     std::cerr << "  ./snesfox --debug [rom.sfc] [--log-cpu]  # full debug UI (toolbar, panels, Load button); --log-cpu dumps every executed CPU instruction to cpu.asm\n";
     std::cerr << "  ./snesfox snap <rom.sfc> [frames]   # dump PPU/VRAM heuristics (no SDL)\n";
@@ -30,11 +29,18 @@ void printUsage() {
     std::cerr << "  ./snesfox cov <rom.sfc> <coverage.out> [frames]\n";
     std::cerr << "  ./snesfox disasm <rom.sfc> [output.asm [coverage.out]]\n";
     std::cerr << "  ./snesfox reasm <input.asm> [output.sfc]\n";
+    std::cerr << "  ./snesfox selftest                  # PPU register regression tests (no ROM)\n";
+    std::cerr << "  ./snesfox --help\n";
 }
 
 } // namespace
 
 int SnesFoxApp::run(int argc, char** argv) {
+    if (argc >= 2 && std::string(argv[1]) == "--help") {
+        printUsage();
+        return 0;
+    }
+
     if (argc >= 2 && std::string(argv[1]) == "selftest") {
         const int ppuResult = runPpuSelfTests();
         const int cpuResult = runCpuSelfTests();
@@ -47,6 +53,14 @@ int SnesFoxApp::run(int argc, char** argv) {
     };
 
     const bool debugUi = argc >= 2 && std::string(argv[1]) == "--debug";
+
+    // Any other `--xxx` at this position isn't a ROM path (real SNES ROM filenames never
+    // start with "--"), so it must be a mistyped/unsupported option rather than something to
+    // silently hand to the bare-launch fallback below as if it were a ROM to load.
+    if (argc >= 2 && !debugUi && std::string(argv[1]).rfind("--", 0) == 0) {
+        printUsage();
+        return 1;
+    }
 
     // `./snesfox --debug [rom.sfc] [--log-cpu]` opens the full debug UI (side
     // panels, toolbar, Load button). Anything else that isn't a recognized subcommand opens
