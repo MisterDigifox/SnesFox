@@ -272,8 +272,14 @@ DebugPanel makeDebugPanel(
         if (logCount > 0) {
             const GSU::DebugLogEntry& e = gsu.debugLogEntry(logCount - 1);
             panel.gsuPcAddr = static_cast<uint16_t>(e.pc - 1);
+            // Operand bytes aren't stored in the log itself (see DebugLogEntry's doc comment) —
+            // ROM is immutable, so re-derive them here, once per frame, instead of on every GSU
+            // instruction.
+            const uint32_t operandBase = (static_cast<uint32_t>(e.pbr) << 16) | e.pc;
+            const uint8_t operand1 = bus.gsuReadRom(operandBase);
+            const uint8_t operand2 = bus.gsuReadRom(operandBase + 1);
             panel.gsuCurrentInstr = gsuDisassemble(panel.gsuPcAddr, e.opcode, e.alt1, e.alt2,
-                                                    e.operand1, e.operand2);
+                                                    operand1, operand2);
         }
     }
 

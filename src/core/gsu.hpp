@@ -76,16 +76,19 @@ public:
     // Debug-only rolling log of executed instructions (for the "GSU Debugger" UI panel) — filled
     // every step while SFR.GO is set, oldest entries overwritten once full. `pc` is the value of
     // r15 immediately after the opcode byte was fetched (matching the real pipelined-fetch
-    // convention: the opcode's own address is `pc-1`); `operand1`/`operand2` are peeked directly
-    // from ROM (no side effects) so a UI can disassemble without re-deriving fetch timing.
+    // convention: the opcode's own address is `pc-1`). Deliberately does NOT carry operand bytes:
+    // this struct is written on every single GSU instruction (potentially millions/sec at
+    // 21.48MHz) but only the most recent entry is ever read, once per video frame, by the debug
+    // UI — peeking two extra ROM bytes here unconditionally cost every instruction two virtual
+    // calls plus a modulo division for a value that's thrown away 99.9%+ of the time. ROM is
+    // immutable, so a reader can cheaply re-derive operand1/operand2 from `pbr`/`pc` later
+    // (see debug_panel_builder.cpp) instead.
     struct DebugLogEntry {
         uint8_t pbr = 0;
         uint16_t pc = 0;
         uint8_t opcode = 0;
         bool alt1 = false;
         bool alt2 = false;
-        uint8_t operand1 = 0;
-        uint8_t operand2 = 0;
     };
     static constexpr size_t kDebugLogSize = 48;
     size_t debugLogCount() const { return m_debugLogCount; }

@@ -683,8 +683,7 @@ void CPU::reset(const Bus& bus, uint16_t resetVector) {
     m_waiting = false;
     m_stopped = false;
 
-    m_instruction = "RESET";
-    m_bytes.clear();
+    m_decodeKind = DecodeKind::Reset;
 }
 
 void CPU::triggerNmi(Bus& bus) {
@@ -749,8 +748,8 @@ void CPU::step(Bus& bus) {
     const CpuOpcode& op = cpuOpcodesTable[m_opcode];
 
     if (!op.valid) {
-        m_bytes = raw8(b0);
-        m_instruction = "DB " + hex8(m_opcode);
+        m_decodeKind = DecodeKind::Invalid;
+        m_decodeB0 = b0;
         m_pc = static_cast<uint16_t>(m_pc + 1);
         m_cycles += 1;
         m_fineCycles += 1 * 8;
@@ -758,15 +757,16 @@ void CPU::step(Bus& bus) {
     }
 
     const uint8_t size = instructionSize(op, m_p);
-    m_bytes = formatBytes(size, b0, b1, b2, b3);
-
-    const std::string operand = formatOperand(op.mode, b1, b2, b3, m_pc, m_p);
-
-    if (operand.empty()) {
-        m_instruction = op.name;
-    } else {
-        m_instruction = std::string(op.name) + " " + operand;
-    }
+    m_decodeKind = DecodeKind::Normal;
+    m_decodeB0 = b0;
+    m_decodeB1 = b1;
+    m_decodeB2 = b2;
+    m_decodeB3 = b3;
+    m_decodeSize = size;
+    m_decodeMode = op.mode;
+    m_decodeOpName = op.name;
+    m_decodePc = m_pc;
+    m_decodeP = m_p;
 
     bool pcHandled = false;
 
@@ -3419,8 +3419,32 @@ uint8_t CPU::bank() const { return m_bank; }
 uint16_t CPU::pc() const { return m_pc; }
 uint32_t CPU::pc24() const { return (static_cast<uint32_t>(m_bank) << 16) | m_pc; }
 uint8_t CPU::opcode() const { return m_opcode; }
-const std::string& CPU::instruction() const { return m_instruction; }
-const std::string& CPU::bytes() const { return m_bytes; }
+std::string CPU::instruction() const {
+    switch (m_decodeKind) {
+        case DecodeKind::Reset:
+            return "RESET";
+        case DecodeKind::Invalid:
+            return "DB " + hex8(m_decodeB0);
+        case DecodeKind::Normal: {
+            const std::string operand =
+                formatOperand(m_decodeMode, m_decodeB1, m_decodeB2, m_decodeB3, m_decodePc, m_decodeP);
+            return operand.empty() ? std::string(m_decodeOpName) : std::string(m_decodeOpName) + " " + operand;
+        }
+    }
+    return "???";
+}
+
+std::string CPU::bytes() const {
+    switch (m_decodeKind) {
+        case DecodeKind::Reset:
+            return "";
+        case DecodeKind::Invalid:
+            return raw8(m_decodeB0);
+        case DecodeKind::Normal:
+            return formatBytes(m_decodeSize, m_decodeB0, m_decodeB1, m_decodeB2, m_decodeB3);
+    }
+    return "";
+}
 uint8_t CPU::p() const { return m_p; }
 bool CPU::flagM() const { return (m_p & FLAG_M) != 0; }
 bool CPU::flagX() const { return (m_p & FLAG_X) != 0; }
