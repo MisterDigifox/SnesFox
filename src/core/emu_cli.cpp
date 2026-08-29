@@ -236,7 +236,7 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
                 }
             }
 
-            const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), bus, instructionLog, paused);
+            const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), bus, instructionLog, paused, debugUi);
             const PaletteEdit paletteEdit = display.presentWithFrame(bus.ppu().framebuffer(), panel);
             if (paletteEdit.applied) {
                 bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);

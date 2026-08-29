@@ -123,14 +123,17 @@ DebugPanel makeDebugPanel(
     const Ppu& ppu,
     const Bus& bus,
     const std::deque<std::string>& instructionLog,
-    bool paused
+    bool paused,
+    bool debugUi
 ) {
     DebugPanel panel;
     panel.sections.push_back(headerLinesToSection(headerLines));
 
-    panel.showPalette = true;
-    for (int i = 0; i < 256; ++i) {
-        panel.palette[i] = ppu.cgram()[i];
+    panel.showPalette = debugUi;
+    if (debugUi) {
+        for (int i = 0; i < 256; ++i) {
+            panel.palette[i] = ppu.cgram()[i];
+        }
     }
 
     panel.sections.push_back(DebugSection{"CPU Debug", {
@@ -207,8 +210,10 @@ DebugPanel makeDebugPanel(
         panel.bgChrBase[i] = static_cast<uint16_t>(((nba >> shift) & 0x0F) * 0x1000);
     }
 
-    panel.showTiles = true;
-    decodeTileSheet(ppu.vram(), ppu.cgram(), panel.tileSheetArgb);
+    panel.showTiles = debugUi;
+    if (debugUi) {
+        decodeTileSheet(ppu.vram(), ppu.cgram(), panel.tileSheetArgb);
+    }
 
     panel.instructionLog.assign(instructionLog.begin(), instructionLog.end());
 
@@ -265,8 +270,10 @@ DebugPanel makeDebugPanel(
         panel.gsuCbr = gsu.cbr();
         for (int i = 0; i < 16; ++i) panel.gsuRegs[i] = gsu.reg(static_cast<uint8_t>(i));
 
-        decodeGsuRam(gsu, bus.gsuWorkRam(), ppu.cgram(), panel.gsuRamArgb,
-                     panel.gsuRamWidthPx, panel.gsuRamHeightPx, panel.gsuRamBpp);
+        if (debugUi) {
+            decodeGsuRam(gsu, bus.gsuWorkRam(), ppu.cgram(), panel.gsuRamArgb,
+                         panel.gsuRamWidthPx, panel.gsuRamHeightPx, panel.gsuRamBpp);
+        }
 
         const size_t logCount = gsu.debugLogCount();
         if (logCount > 0) {

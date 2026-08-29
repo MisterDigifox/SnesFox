@@ -208,6 +208,15 @@ private:
                               SpritePixel* spr, bool mainScreen) const;
     uint16_t tilemapEntry(int bg, int tileCol, int tileRow) const;
     uint8_t  getPixel(int bpp, uint16_t base, uint16_t tileNum, int row, int col) const;
+
+    // getPixel() split into its two halves so a per-scanline pixel loop (renderBg/
+    // renderSprites) can decode a tile row's bitplane words once and reuse them across the
+    // (up to 8) consecutive pixels that share the same tileNum+row, instead of re-fetching
+    // and re-decoding VRAM on every single pixel — this was the dominant PPU rendering cost
+    // (confirmed via profiling: getPixel redid this work up to 8x per tile row for 8bpp).
+    struct TileRowPlanes { uint16_t w[4]; };
+    TileRowPlanes decodeTileRowPlanes(int bpp, uint16_t base, uint16_t tileNum, int row) const;
+    static uint8_t pixelFromPlanes(int bpp, const TileRowPlanes& planes, int col);
     uint32_t cgramToArgb(uint16_t bgr555) const;
     uint32_t applyInidispLuma(uint32_t argb) const;
 

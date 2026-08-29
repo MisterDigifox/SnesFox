@@ -476,41 +476,47 @@ uint16_t Ppu::tilemapEntry(int bg, int tileCol, int tileRow) const {
 //   col : pixel column 0=left … 7=right within tile (already flip-adjusted)
 //   Returns raw color index (0 = transparent)
 // -----------------------------------------------------------------------
-uint8_t Ppu::getPixel(int bpp, uint16_t base, uint16_t tileNum, int row, int col) const {
-    // Per SNES planar layout each row byte uses MSB=left, LSB=right (matches Krom PPU flip tests /
-    // e.g. https://emudev.de/q00-snes/backgrounds-modes-and-tests/ flipping section).
-    const int bit = 7 - col;
+Ppu::TileRowPlanes Ppu::decodeTileRowPlanes(int bpp, uint16_t base, uint16_t tileNum, int row) const {
+    const uint16_t stride = static_cast<uint16_t>(bpp == 2 ? 8 : bpp == 4 ? 16 : 32);
+    const uint16_t tileBase = static_cast<uint16_t>(base + tileNum * stride);
+    TileRowPlanes planes{};
+    const int planeCount = bpp == 2 ? 1 : bpp == 4 ? 2 : 4;
+    for (int p = 0; p < planeCount; ++p) {
+        planes.w[p] = m_vram[(tileBase + static_cast<uint16_t>(row + p * 8)) & 0x7FFF];
+    }
+    return planes;
+}
 
-    auto plane = [&](uint16_t wordOff) -> uint16_t {
-        return m_vram[(base + tileNum * static_cast<uint16_t>(bpp == 2 ? 8 : bpp == 4 ? 16 : 32) + wordOff) & 0x7FFF];
+// Per SNES planar layout each row byte uses MSB=left, LSB=right (matches Krom PPU flip tests /
+// e.g. https://emudev.de/q00-snes/backgrounds-modes-and-tests/ flipping section).
+uint8_t Ppu::pixelFromPlanes(int bpp, const TileRowPlanes& planes, int col) {
+    const int bit = 7 - col;
+    auto pair = [&](uint16_t w) -> uint8_t {
+        return static_cast<uint8_t>(((w >> bit) & 1) | (((w >> (8 + bit)) & 1) << 1));
     };
 
     switch (bpp) {
-    case 2: {
-        const uint16_t w = plane(static_cast<uint16_t>(row));
-        return static_cast<uint8_t>(((w >> bit) & 1) | (((w >> (8 + bit)) & 1) << 1));
-    }
+    case 2:
+        return pair(planes.w[0]);
     case 4: {
-        const uint16_t w0 = plane(static_cast<uint16_t>(row));
-        const uint16_t w1 = plane(static_cast<uint16_t>(8 + row));
-        const uint8_t p01 = static_cast<uint8_t>(((w0 >> bit) & 1) | (((w0 >> (8 + bit)) & 1) << 1));
-        const uint8_t p23 = static_cast<uint8_t>(((w1 >> bit) & 1) | (((w1 >> (8 + bit)) & 1) << 1));
+        const uint8_t p01 = pair(planes.w[0]);
+        const uint8_t p23 = pair(planes.w[1]);
         return static_cast<uint8_t>(p01 | (p23 << 2));
     }
     case 8: {
-        const uint16_t w0 = plane(static_cast<uint16_t>(row));
-        const uint16_t w1 = plane(static_cast<uint16_t>(8 + row));
-        const uint16_t w2 = plane(static_cast<uint16_t>(16 + row));
-        const uint16_t w3 = plane(static_cast<uint16_t>(24 + row));
-        const uint8_t p01 = static_cast<uint8_t>(((w0 >> bit) & 1) | (((w0 >> (8 + bit)) & 1) << 1));
-        const uint8_t p23 = static_cast<uint8_t>(((w1 >> bit) & 1) | (((w1 >> (8 + bit)) & 1) << 1));
-        const uint8_t p45 = static_cast<uint8_t>(((w2 >> bit) & 1) | (((w2 >> (8 + bit)) & 1) << 1));
-        const uint8_t p67 = static_cast<uint8_t>(((w3 >> bit) & 1) | (((w3 >> (8 + bit)) & 1) << 1));
+        const uint8_t p01 = pair(planes.w[0]);
+        const uint8_t p23 = pair(planes.w[1]);
+        const uint8_t p45 = pair(planes.w[2]);
+        const uint8_t p67 = pair(planes.w[3]);
         return static_cast<uint8_t>(p01 | (p23 << 2) | (p45 << 4) | (p67 << 6));
     }
     default:
         return 0;
     }
+}
+
+uint8_t Ppu::getPixel(int bpp, uint16_t base, uint16_t tileNum, int row, int col) const {
+    return pixelFromPlanes(bpp, decodeTileRowPlanes(bpp, base, tileNum, row), col);
 }
 
 // 8-bit Mode 7 "direct colour" -> BGR555 (then same expansion as CGRAM).
@@ -649,37 +655,67 @@ void Ppu::renderBg(int bg, int bpp, int line, LayerPixel* out) const {
     const int tileRow = effY / tileSz;                  // coarse tile row in tilemap
     const int fineYt  = effY % tileSz;                  // pixel row within the tile cell
 
+    // Consecutive x's within the same tile cell (8 or 16 wide) share the same tilemap
+    // entry, flip/priority/palette bits, and decoded bitplane row — only `fx` (and the
+    // large-tile sub-tile split) actually varies pixel-to-pixel. Re-deriving all of that
+    // from scratch on every single pixel (tilemapEntry lookup, flip math, VRAM bitplane
+    // decode) was redoing 7/8ths of the same work redundantly; this was the dominant PPU
+    // rendering cost confirmed by profiling actual gameplay. Cache on `tileCol` — the
+    // coarsest input that changes only once per tile — and only redo the tile-level work
+    // when it does.
+    int cachedTileCol = -1;
+    bool  hflip = false;
+    int   fyForTile = 0;
+    uint8_t pri = 0;
+    uint8_t pal = 0;
+    uint16_t baseN = 0;
+    TileRowPlanes planes{};
+
     for (int x = 0; x < 256; ++x) {
         const int sampleX = (mosaicSize > 1) ? (x - (x % mosaicSize)) : x;
         const int effX    = (sampleX + static_cast<int>(hofs)) & 0x3FF;
         const int tileCol = effX / tileSz;
         const int fineXt  = effX % tileSz;
 
-        // Fetch tilemap word (hardware layout; see SNESdev "Tilemaps"):
-        //   bits 15-14 → VFlip, HFlip  |  bit 13 → priority |  bits 12-10 → palette
-        //   bits 9-0   → tile number (10 bits)
-        const uint16_t entry = tilemapEntry(bg, tileCol, tileRow);
-        const bool     vflip = (entry >> 15) & 1;
-        const bool     hflip = (entry >> 14) & 1;
-        const bool     pri   = (entry >> 13) & 1;
-        const uint8_t  pal   = static_cast<uint8_t>((entry >> 10) & 7);
-        const uint16_t baseN = entry & 0x3FF;
+        if (tileCol != cachedTileCol) {
+            // Fetch tilemap word (hardware layout; see SNESdev "Tilemaps"):
+            //   bits 15-14 → VFlip, HFlip  |  bit 13 → priority |  bits 12-10 → palette
+            //   bits 9-0   → tile number (10 bits)
+            const uint16_t entry = tilemapEntry(bg, tileCol, tileRow);
+            const bool     vflip = (entry >> 15) & 1;
+            hflip = (entry >> 14) & 1;
+            pri   = static_cast<uint8_t>((entry >> 13) & 1);
+            pal   = static_cast<uint8_t>((entry >> 10) & 7);
+            baseN = entry & 0x3FF;
+            fyForTile = vflip ? (tileSz - 1 - fineYt) : fineYt;
+
+            // For non-large tiles (no sub-tile split), the row is fully determined here —
+            // decode it now. Large tiles need `fx` first to pick the sub-tile, so that case
+            // decodes lazily below (still only once per 8-pixel half, via cachedTileCol).
+            if (!largeTiles) {
+                planes = decodeTileRowPlanes(bpp, chr, baseN, fyForTile);
+            }
+            cachedTileCol = tileCol;
+        }
 
         // Apply flip within the tile cell
         int fx = hflip ? (tileSz - 1 - fineXt) : fineXt;
-        int fy = vflip ? (tileSz - 1 - fineYt) : fineYt;
+        int fy = fyForTile;
 
-        // For 16×16 tiles: select sub-tile and reduce to 8×8 coordinates
-        uint16_t tileNum = baseN;
+        // For 16×16 tiles: select sub-tile and reduce to 8×8 coordinates. Only the low 3
+        // bits of fx change within an 8-pixel half, so this still only decodes twice per
+        // 16-wide cell (once per half) rather than once per pixel.
         if (largeTiles) {
             const int subX = fx >> 3;
             const int subY = fy >> 3;
-            tileNum = (baseN + static_cast<uint16_t>(subX) + static_cast<uint16_t>(subY * 16)) & 0x3FF;
+            const uint16_t tileNum = (baseN + static_cast<uint16_t>(subX) + static_cast<uint16_t>(subY * 16)) & 0x3FF;
             fx &= 7;
             fy &= 7;
+            if ((fineXt & 7) == 0 || x == 0) {
+                planes = decodeTileRowPlanes(bpp, chr, tileNum, fy);
+            }
         }
-
-        const uint8_t color = getPixel(bpp, chr, tileNum, fy, fx);
+        const uint8_t color = pixelFromPlanes(bpp, planes, fx);
 
         if (color == 0) {
             out[x] = { 0, 0 };   // transparent
@@ -783,6 +819,11 @@ void Ppu::renderSprites(int line, SpritePixel* out) const {
         // CHR base for this sprite
         const uint16_t tileBase = nameBase + (nameBit ? nameGap : uint16_t(0));
 
+        // fineY is constant for the whole sprite row — only tileNum changes (every 8 lxi),
+        // so cache the decoded row like renderBg does instead of re-fetching VRAM per pixel.
+        int cachedTileNum = -1;
+        TileRowPlanes planes{};
+
         for (int lxi = 0; lxi < sprW; ++lxi) {
             const int screenX = sprX + lxi;
             if (screenX < 0 || screenX >= 256) continue;
@@ -795,7 +836,11 @@ void Ppu::renderSprites(int line, SpritePixel* out) const {
             const uint8_t tileNum = static_cast<uint8_t>(
                 baseN + static_cast<uint8_t>(tileCol) + static_cast<uint8_t>(tileRow * 16));
 
-            const uint8_t color = getPixel(4, tileBase, tileNum, fineY, fineX);
+            if (tileNum != cachedTileNum) {
+                planes = decodeTileRowPlanes(4, tileBase, tileNum, fineY);
+                cachedTileNum = tileNum;
+            }
+            const uint8_t color = pixelFromPlanes(4, planes, fineX);
             if (color == 0) continue;  // transparent
 
             out[screenX] = {
