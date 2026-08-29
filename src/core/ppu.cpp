@@ -1241,21 +1241,20 @@ void Ppu::renderScanline(int line) {
     if (tmts & 0x10) renderSprites(line, spr);
 
     // Split raster into main/sub designation, then independent per-screen window masking.
+    // The "sub" screen (bg*s/sprs) only ever gets read below when useSubAddend is true —
+    // finalizePixelRgb's subFromScreen branch (the only place it dereferences its subSample
+    // pointer) checks the exact same $2130 CGSWSEL bit. So building it at all — 5 memcpy, up
+    // to 5 memset, and a full 256-pixel window-mask pass — is pure waste whenever color math
+    // isn't pulling from the subscreen (fixed-color or color-math-off games, i.e. most of the
+    // time): confirmed as the dominant real-gameplay PPU cost via profiling.
     LayerPixel  bg0m[256]{}, bg1m[256]{}, bg2m[256]{}, bg3m[256]{};
-    LayerPixel  bg0s[256]{}, bg1s[256]{}, bg2s[256]{}, bg3s[256]{};
     SpritePixel sprm[256]{};
-    SpritePixel sprs[256]{};
 
     std::memcpy(bg0m, bg0, sizeof(bg0));
     std::memcpy(bg1m, bg1, sizeof(bg1));
     std::memcpy(bg2m, bg2, sizeof(bg2));
     std::memcpy(bg3m, bg3, sizeof(bg3));
     std::memcpy(sprm, spr, sizeof(spr));
-    std::memcpy(bg0s, bg0, sizeof(bg0));
-    std::memcpy(bg1s, bg1, sizeof(bg1));
-    std::memcpy(bg2s, bg2, sizeof(bg2));
-    std::memcpy(bg3s, bg3, sizeof(bg3));
-    std::memcpy(sprs, spr, sizeof(spr));
 
     auto clearIfDisabledMain = [&](uint8_t tmBit, LayerPixel* b) {
         if ((m_tm & tmBit) == 0) std::memset(b, 0, sizeof(LayerPixel) * 256u);
@@ -1266,19 +1265,31 @@ void Ppu::renderScanline(int line) {
     clearIfDisabledMain(0x08, bg3m);
     if ((m_tm & 0x10) == 0) std::memset(sprm, 0, sizeof(sprm));
 
-    auto clearIfDisabledSub = [&](uint8_t tsBit, LayerPixel* b) {
-        if ((m_ts & tsBit) == 0) std::memset(b, 0, sizeof(LayerPixel) * 256u);
-    };
-    clearIfDisabledSub(0x01, bg0s);
-    clearIfDisabledSub(0x02, bg1s);
-    clearIfDisabledSub(0x04, bg2s);
-    clearIfDisabledSub(0x08, bg3s);
-    if ((m_ts & 0x10) == 0) std::memset(sprs, 0, sizeof(sprs));
-
     applyWindowMask(line, bg0m, bg1m, bg2m, bg3m, sprm, true);
-    applyWindowMask(line, bg0s, bg1s, bg2s, bg3s, sprs, false);
 
     const bool useSubAddend = (m_cgswsel & 0x02u) != 0;
+
+    LayerPixel  bg0s[256]{}, bg1s[256]{}, bg2s[256]{}, bg3s[256]{};
+    SpritePixel sprs[256]{};
+    if (useSubAddend) {
+        std::memcpy(bg0s, bg0, sizeof(bg0));
+        std::memcpy(bg1s, bg1, sizeof(bg1));
+        std::memcpy(bg2s, bg2, sizeof(bg2));
+        std::memcpy(bg3s, bg3, sizeof(bg3));
+        std::memcpy(sprs, spr, sizeof(spr));
+
+        auto clearIfDisabledSub = [&](uint8_t tsBit, LayerPixel* b) {
+            if ((m_ts & tsBit) == 0) std::memset(b, 0, sizeof(LayerPixel) * 256u);
+        };
+        clearIfDisabledSub(0x01, bg0s);
+        clearIfDisabledSub(0x02, bg1s);
+        clearIfDisabledSub(0x04, bg2s);
+        clearIfDisabledSub(0x08, bg3s);
+        if ((m_ts & 0x10) == 0) std::memset(sprs, 0, sizeof(sprs));
+
+        applyWindowMask(line, bg0s, bg1s, bg2s, bg3s, sprs, false);
+    }
+
     for (int x = 0; x < 256; ++x) {
         const CompositeSample mains = compositeSample(x, bg0m, bg1m, bg2m, bg3m, sprm);
         if (useSubAddend) {
