@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>

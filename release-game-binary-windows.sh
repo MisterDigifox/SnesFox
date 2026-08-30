@@ -15,8 +15,14 @@ set -e
 # so this links src/windows/native_file_dialog.cpp instead (native GetOpenFileName dialog,
 # no-op menu-bar hooks) against the same shared native_file_dialog.hpp interface.
 
-ROM_NAME="Transparency"
-ROM_SRC="roms/$ROM_NAME.sfc"
+if [ -z "$1" ]; then
+  echo "Erreur: ROM_SRC requis en paramètre." >&2
+  echo "Usage: $0 <ROM_SRC>" >&2
+  exit 1
+fi
+
+ROM_SRC="$1"
+ROM_NAME="$(basename "$ROM_SRC" .sfc)"
 GEN_HEADER="src/game/embedded_rom.generated.hpp"
 
 MINGW_TRIPLE="x86_64-w64-mingw32"
@@ -27,6 +33,7 @@ if ! command -v "$MINGW_CXX" >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Downloading SDL2 for Windows"
 SDL2_VERSION="2.30.9"
 SDL2_CACHE_DIR=".cache/SDL2-mingw"
 SDL2_TARBALL="SDL2-devel-${SDL2_VERSION}-mingw.tar.gz"
@@ -47,6 +54,7 @@ xxd -i "$ROM_SRC" \
 
 rm -f "$ROM_NAME.exe" SDL2.dll
 
+echo "Compiling"
 "$MINGW_CXX" -std=c++20 -O2 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" \
   src/game/main_game.cpp src/core/*.cpp src/windows/*.cpp tests/*.cpp imgui/*.cpp imgui/backends/*.cpp \
   -o "$ROM_NAME.exe" \
@@ -61,6 +69,10 @@ rm -f "$ROM_NAME.exe" SDL2.dll
   -lcomdlg32 \
   -static-libgcc -static-libstdc++ -static -lpthread
 
+echo "Removing previous Game directory"
+rm -rf Game
+
+echo "Creating Game directory"
 mkdir -p Game
 
 # SDL2.dll is dynamically loaded at runtime — $ROM_NAME.exe won't start without it next to it.
