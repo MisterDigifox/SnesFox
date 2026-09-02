@@ -67,11 +67,11 @@ public:
         bool active = false;
         uint16_t brrAddr = 0;
         uint16_t loopAddr = 0;
+        uint16_t pitch = 0; // 14-bit pitch register (VxPITCHL/H); ~32000/1024*pitch Hz for sample playback rate
+        int8_t voll = 0;
+        int8_t volr = 0;
     };
-    [[nodiscard]] VoiceDebugState voiceDebugState(int voice) const {
-        const Voice& v = m_voices[static_cast<size_t>(voice)];
-        return VoiceDebugState{v.active, v.brrAddr, v.loopAddr};
-    }
+    [[nodiscard]] VoiceDebugState voiceDebugState(int voice) const;
 
     /// Debug aid: when >= 0, only that voice contributes to the mixed output (every voice
     /// still decodes/advances/envelopes normally — only the final mix contribution is

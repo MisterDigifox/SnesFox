@@ -150,6 +150,18 @@ size_t Sdsp::popSamples(PcmFrame* out, size_t maxFrames) {
     return n;
 }
 
+Sdsp::VoiceDebugState Sdsp::voiceDebugState(int voice) const {
+    const size_t i = static_cast<size_t>(voice);
+    const Voice& v = m_voices[i];
+    const uint16_t pitch = static_cast<uint16_t>((m_regs[static_cast<size_t>(voiceReg(i, 0x02))]
+        | ((m_regs[static_cast<size_t>(voiceReg(i, 0x03))] & 0x3F) << 8)) & 0x3FFF);
+    return VoiceDebugState{
+        v.active, v.brrAddr, v.loopAddr, pitch,
+        signedReg(m_regs[static_cast<size_t>(voiceReg(i, 0x00))]),
+        signedReg(m_regs[static_cast<size_t>(voiceReg(i, 0x01))]),
+    };
+}
+
 void Sdsp::keyOn(uint8_t mask, const std::array<uint8_t, 65536>& aram) {
     const uint16_t dirBase = static_cast<uint16_t>(m_regs[static_cast<size_t>(r_dir)] << 8);
     for (size_t i = 0; i < kVoices; ++i) {

@@ -68,6 +68,10 @@ struct DebugPanel {
     std::array<bool, 8> dspActive{};     // per-voice live "currently sounding" state
     std::array<uint16_t, 8> dspBrrAddr{}; // per-voice ARAM address of the BRR data actually playing
     std::array<uint16_t, 8> dspLoadAddr{}; // per-voice fixed sample start addr from the DIR table (SRCN lookup)
+    std::array<uint16_t, 8> dspLoopAddr{}; // per-voice loop restart addr from the DIR table (entry+2)
+    std::array<uint16_t, 8> dspPitch{};    // per-voice 14-bit pitch register (VxPITCHL/H)
+    std::array<int8_t, 8> dspVoll{};       // per-voice left volume (signed, VxVOLL)
+    std::array<int8_t, 8> dspVolr{};       // per-voice right volume (signed, VxVOLR)
 
     // GSU Debugger panel — only meaningful when hasGsu is true.
     bool hasGsu = false;

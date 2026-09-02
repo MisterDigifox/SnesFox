@@ -501,12 +501,16 @@ void Display::drawRightPanel(const DebugPanel& panel) {
     }
     ImGui::Text("DIR:$%02X (table @ $%04X)   KON:$%02X  ENDX:$%02X",
                 panel.dspDir, static_cast<unsigned>(panel.dspDir) << 8, panel.dspKon, panel.dspEndx);
-    if (ImGui::BeginTable("DspVoices", 7, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Borders)) {
+    if (ImGui::BeginTable("DspVoices", 11, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Borders)) {
         ImGui::TableSetupColumn("Voice");
         ImGui::TableSetupColumn("SRCN");
         ImGui::TableSetupColumn("Load Addr");
+        ImGui::TableSetupColumn("Loop Addr");
         ImGui::TableSetupColumn("ARAM Addr");
         ImGui::TableSetupColumn("Playing");
+        ImGui::TableSetupColumn("Pitch");
+        ImGui::TableSetupColumn("Vol L");
+        ImGui::TableSetupColumn("Vol R");
         ImGui::TableSetupColumn("ENVX");
         ImGui::TableSetupColumn("OUTX");
         ImGui::TableHeadersRow();
@@ -519,16 +523,24 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             ImGui::TableSetColumnIndex(2);
             ImGui::Text("$%04X", panel.dspLoadAddr[v]);
             ImGui::TableSetColumnIndex(3);
+            ImGui::Text("$%04X", panel.dspLoopAddr[v]);
+            ImGui::TableSetColumnIndex(4);
             if (panel.dspActive[v]) {
                 ImGui::TextColored(VALUE_COLOR, "$%04X", panel.dspBrrAddr[v]);
             } else {
                 ImGui::TextDisabled("--");
             }
-            ImGui::TableSetColumnIndex(4);
-            ImGui::TextUnformatted(panel.dspActive[v] ? "yes" : "no");
             ImGui::TableSetColumnIndex(5);
-            ImGui::Text("$%02X", panel.dspEnvx[v]);
+            ImGui::TextUnformatted(panel.dspActive[v] ? "yes" : "no");
             ImGui::TableSetColumnIndex(6);
+            ImGui::Text("$%04X", panel.dspPitch[v]);
+            ImGui::TableSetColumnIndex(7);
+            ImGui::Text("%d", panel.dspVoll[v]);
+            ImGui::TableSetColumnIndex(8);
+            ImGui::Text("%d", panel.dspVolr[v]);
+            ImGui::TableSetColumnIndex(9);
+            ImGui::Text("$%02X", panel.dspEnvx[v]);
+            ImGui::TableSetColumnIndex(10);
             ImGui::Text("$%02X", panel.dspOutx[v]);
         }
         ImGui::EndTable();

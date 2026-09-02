@@ -232,6 +232,10 @@ DebugPanel makeDebugPanel(
             const Sdsp::VoiceDebugState vs = dsp.voiceDebugState(v);
             panel.dspActive[v] = vs.active;
             panel.dspBrrAddr[v] = vs.brrAddr;
+            panel.dspLoopAddr[v] = vs.loopAddr;
+            panel.dspPitch[v] = vs.pitch;
+            panel.dspVoll[v] = vs.voll;
+            panel.dspVolr[v] = vs.volr;
 
             const uint32_t dirEntry = (static_cast<uint32_t>(panel.dspDir) << 8)
                                      + static_cast<uint32_t>(panel.dspSrcn[v]) * 4;
