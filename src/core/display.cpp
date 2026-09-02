@@ -546,6 +546,44 @@ void Display::drawRightPanel(const DebugPanel& panel) {
         ImGui::EndTable();
     }
 
+    ImGui::SeparatorText("Sample Directory (DIR table)");
+    // Hardware has no length field for this table — every SRCN 0-255 is a valid read, most
+    // just never get referenced by the game. Unlike the voice table above (only the 8 live
+    // voices), this walks the whole 256-entry table directly from ARAM so a sample can be
+    // located/checked even while nothing is currently playing it.
+    constexpr float kDirTableChildHeight = 200.0f;
+    ImGui::BeginChild("DirTableScroll", ImVec2(0.0f, kDirTableChildHeight), false);
+    ImGuiListClipper dirClipper;
+    dirClipper.Begin(256);
+    while (dirClipper.Step()) {
+        for (int srcn = dirClipper.DisplayStart; srcn < dirClipper.DisplayEnd; ++srcn) {
+            const uint32_t entry = (static_cast<uint32_t>(panel.dspDir) << 8) + static_cast<uint32_t>(srcn) * 4;
+            const uint16_t startAddr = static_cast<uint16_t>(panel.apuRam[entry] | (panel.apuRam[entry + 1] << 8));
+            const uint16_t loopAddr = static_cast<uint16_t>(panel.apuRam[entry + 2] | (panel.apuRam[entry + 3] << 8));
+
+            char voiceTag[32] = "";
+            int voiceTagPos = 0;
+            bool rowHasVoice = false;
+            for (int v = 0; v < 8; ++v) {
+                if (panel.dspActive[v] && panel.dspSrcn[v] == srcn) {
+                    rowHasVoice = true;
+                    voiceTagPos += std::snprintf(voiceTag + voiceTagPos, sizeof(voiceTag) - static_cast<size_t>(voiceTagPos),
+                                                  "%sV%d", voiceTagPos > 0 ? "," : " <- ", v);
+                }
+            }
+
+            char line[64];
+            std::snprintf(line, sizeof(line), "SRCN $%02X: start=$%04X loop=$%04X", srcn, startAddr, loopAddr);
+            if (rowHasVoice) {
+                ImGui::TextColored(VALUE_COLOR, "%s%s", line, voiceTag);
+            } else {
+                ImGui::TextUnformatted(line);
+            }
+        }
+    }
+    dirClipper.End();
+    ImGui::EndChild();
+
     ImGui::SeparatorText("APU RAM (ARAM)");
     // Fixed height rather than GetContentRegionAvail(): by this point Palette + S-DSP Voices
     // above have already consumed more than the "Right" window's own declared height, so the
