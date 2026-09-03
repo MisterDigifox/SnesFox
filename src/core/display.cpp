@@ -17,7 +17,7 @@ constexpr int scale23(int v) { return (v * 2 + 1) / 3; }
 constexpr int WINDOW_HEIGHT = scale23(768); // height of the top area (left/right menus + game frame)
 constexpr int BOTTOM_PANEL_HEIGHT = scale23(440);
 constexpr int LEFT_PANEL_WIDTH = scale23(440);
-constexpr int PANEL_WIDTH   = scale23(700);
+constexpr int PANEL_WIDTH   = scale23(900); // widened for the dir table's entry/start/loop text + Play/Save WAV buttons
 
 constexpr int GAME_SCALE  = 2;
 constexpr int GAME_DST_W  = 256 * GAME_SCALE;                    // 512
@@ -591,18 +591,24 @@ void Display::drawRightPanel(const DebugPanel& panel) {
     dirClipper.Begin(256);
     while (dirClipper.Step()) {
         for (int srcn = dirClipper.DisplayStart; srcn < dirClipper.DisplayEnd; ++srcn) {
-            const uint32_t entry = (static_cast<uint32_t>(panel.dspDir) << 8) + static_cast<uint32_t>(srcn) * 4;
-            const uint16_t startAddr = static_cast<uint16_t>(panel.apuRam[entry] | (panel.apuRam[entry + 1] << 8));
-            const uint16_t loopAddr = static_cast<uint16_t>(panel.apuRam[entry + 2] | (panel.apuRam[entry + 3] << 8));
+            // Wrapped to 16 bits like real hardware — DIR=$FF combined with a high SRCN
+            // would otherwise index panel.apuRam past its 64 KiB bound (undefined behavior).
+            const uint16_t entry = static_cast<uint16_t>((static_cast<uint32_t>(panel.dspDir) << 8) + static_cast<uint32_t>(srcn) * 4);
+            const uint16_t startAddr = static_cast<uint16_t>(panel.apuRam[entry] | (panel.apuRam[static_cast<uint16_t>(entry + 1)] << 8));
+            const uint16_t loopAddr = static_cast<uint16_t>(panel.apuRam[static_cast<uint16_t>(entry + 2)] | (panel.apuRam[static_cast<uint16_t>(entry + 3)] << 8));
 
-            char voiceTag[32] = "";
+            // For each active voice currently playing this SRCN, its *live* ARAM address —
+            // the block actually being decoded right now, which drifts away from `startAddr`
+            // as playback advances (and can differ between voices sharing the same SRCN if
+            // they triggered at different times / are at different points in the sample).
+            char voiceTag[96] = "";
             int voiceTagPos = 0;
             bool rowHasVoice = false;
             for (int v = 0; v < 8; ++v) {
                 if (panel.dspActive[v] && panel.dspSrcn[v] == srcn) {
                     rowHasVoice = true;
                     voiceTagPos += std::snprintf(voiceTag + voiceTagPos, sizeof(voiceTag) - static_cast<size_t>(voiceTagPos),
-                                                  "%sV%d", voiceTagPos > 0 ? "," : " <- ", v);
+                                                  "%sV%d=$%04X", voiceTagPos > 0 ? "," : " <- ", v, panel.dspBrrAddr[v]);
                 }
             }
 
