@@ -164,6 +164,11 @@ private:
     // to the main loop until the mouse button is released — see the .cpp for detail.
     void redrawDuringResize();
     static int sdlEventWatch(void* userdata, SDL_Event* event);
+    // Dir table "Play" button: queues `pcm` (mono S16) for immediate one-shot playback at
+    // `sampleRateHz` on a dedicated SDL audio device, independent of the emulated game's own
+    // AudioOutput. Lazily opens (or reopens, if the rate changed since the last call) that
+    // device; a no-op if `pcm` is empty or the device can't be opened.
+    void playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz);
 
     SDL_Window*   m_window       = nullptr;
     SDL_Renderer* m_renderer     = nullptr;
@@ -186,6 +191,11 @@ private:
     bool m_apuPaused = false; // toggled by the S-DSP Voices section's Pause/Resume button
     bool m_apuStepRequested = false;      // reset each frame in drawRightPanel, set by "Step"
     bool m_apuNextFrameRequested = false; // reset each frame in drawRightPanel, set by "Next Frame"
+
+    // Dir table "Play" button's dedicated one-shot preview audio device — see playBrrPreview().
+    bool m_previewAudioSubsystemInit = false;
+    SDL_AudioDeviceID m_previewAudioDevice = 0;
+    int m_previewAudioDeviceRate = 0;
 
     // Dir table "Save WAV" button's pitch-entry popup: -1 while closed, else the SRCN whose
     // sample is pending export. OpenPopup() is deferred to m_pitchPromptOpenRequested so it's

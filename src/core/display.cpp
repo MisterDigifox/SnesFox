@@ -197,12 +197,44 @@ Display::~Display() {
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
+    if (m_previewAudioDevice != 0) SDL_CloseAudioDevice(m_previewAudioDevice);
     if (m_frameTex)      SDL_DestroyTexture(m_frameTex);
     if (m_tileSheetTex)  SDL_DestroyTexture(m_tileSheetTex);
     if (m_gsuRamTex)     SDL_DestroyTexture(m_gsuRamTex);
     if (m_renderer)  SDL_DestroyRenderer(m_renderer);
     if (m_window)    SDL_DestroyWindow(m_window);
     SDL_Quit();
+}
+
+void Display::playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz) {
+    if (pcm.empty() || sampleRateHz <= 0) return;
+
+    if (!m_previewAudioSubsystemInit) {
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return;
+        m_previewAudioSubsystemInit = true;
+    }
+
+    if (m_previewAudioDevice == 0 || m_previewAudioDeviceRate != sampleRateHz) {
+        if (m_previewAudioDevice != 0) {
+            SDL_CloseAudioDevice(m_previewAudioDevice);
+            m_previewAudioDevice = 0;
+        }
+        SDL_AudioSpec want{};
+        want.freq = sampleRateHz;
+        want.format = AUDIO_S16SYS;
+        want.channels = 1;
+        want.samples = 1024;
+        SDL_AudioSpec have{};
+        // allowed_changes=0: SDL guarantees `have` matches `want` exactly, converting
+        // internally if the driver needs a different native format.
+        m_previewAudioDevice = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (m_previewAudioDevice == 0) return;
+        m_previewAudioDeviceRate = sampleRateHz;
+    }
+
+    SDL_ClearQueuedAudio(m_previewAudioDevice);
+    SDL_QueueAudio(m_previewAudioDevice, pcm.data(), static_cast<uint32_t>(pcm.size() * sizeof(int16_t)));
+    SDL_PauseAudioDevice(m_previewAudioDevice, 0);
 }
 
 int Display::sdlEventWatch(void* userdata, SDL_Event* event) {
@@ -582,23 +614,34 @@ void Display::drawRightPanel(const DebugPanel& panel) {
                 ImGui::TextUnformatted(line);
             }
 
+            // First active voice currently playing this SRCN's real pitch, if any — that's
+            // what it's actually being heard at right now — else `fallback`.
+            const auto activeVoicePitch = [&](uint16_t fallback) {
+                for (int v = 0; v < 8; ++v) {
+                    if (panel.dspActive[v] && panel.dspSrcn[v] == srcn) return panel.dspPitch[v];
+                }
+                return fallback;
+            };
+
             ImGui::SameLine();
             ImGui::PushID(srcn);
+            const bool playClicked = ImGui::SmallButton("Play");
+            ImGui::SameLine();
             const bool saveClicked = ImGui::SmallButton("Save WAV");
             ImGui::PopID();
+
+            if (playClicked) {
+                // No text-entry step for Play — fall back to native rate rather than Save's
+                // deliberate $0 default, since a one-shot preview should actually be audible.
+                const uint16_t pitch = activeVoicePitch(0x1000);
+                const std::vector<int16_t> pcm = decodeBrrSampleForExport(panel.apuRam, startAddr);
+                const int sampleRate = static_cast<int>(kBrrSampleRateHz * static_cast<double>(pitch) / 4096.0 + 0.5);
+                playBrrPreview(pcm, sampleRate);
+            }
             if (saveClicked) {
                 m_pitchPromptSrcn = srcn;
                 m_pitchPromptStartAddr = startAddr;
-                // Prefill with the first active voice currently playing this SRCN's real
-                // pitch, if any — that's what it's actually being heard at — else $0.
-                uint16_t defaultPitch = 0;
-                for (int v = 0; v < 8; ++v) {
-                    if (panel.dspActive[v] && panel.dspSrcn[v] == srcn) {
-                        defaultPitch = panel.dspPitch[v];
-                        break;
-                    }
-                }
-                std::snprintf(m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer), "%04X", defaultPitch);
+                std::snprintf(m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer), "%04X", activeVoicePitch(0));
                 m_pitchPromptOpenRequested = true;
             }
         }
