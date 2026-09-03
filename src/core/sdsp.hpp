@@ -5,6 +5,16 @@
 #include <cstdint>
 #include <vector>
 
+/// Native BRR decode rate (1.024 MHz DSP clock / 32 clocks-per-sample) — the correct sample
+/// rate for a WAV export of [[decodeBrrSampleForExport]]'s raw output.
+constexpr int kBrrSampleRateHz = 32000;
+
+/// Decodes one BRR sample directly out of ARAM for export (debug UI's dir-table "download
+/// sample" button) — independent of any live Voice's playback state. Hardware has no length
+/// field, so this walks 9-byte blocks from `startAddr` until a block's end bit fires, ignoring
+/// the loop bit (a single-shot decode, not the endless loop hardware would actually play).
+std::vector<int16_t> decodeBrrSampleForExport(const std::array<uint8_t, 65536>& aram, uint16_t startAddr);
+
 /// Sony SNES S-DSP: 128-byte register file and IO as seen via SPC `$F2`/`$F3`.
 /// PCM generation (BRR, Gaussian mix, …) can be layered on top of [[runClocks]] later.
 class Sdsp {

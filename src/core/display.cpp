@@ -1,4 +1,6 @@
 #include "display.hpp"
+#include "sdsp.hpp"
+#include "wav_writer.hpp"
 #include "../macOS/native_file_dialog.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -579,6 +581,19 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             } else {
                 ImGui::TextUnformatted(line);
             }
+
+            ImGui::SameLine();
+            ImGui::PushID(srcn);
+            if (ImGui::SmallButton("Save WAV")) {
+                char suggestedName[32];
+                std::snprintf(suggestedName, sizeof(suggestedName), "srcn_%02X.wav", srcn);
+                const std::optional<std::string> path = showSaveSampleDialog(suggestedName);
+                if (path) {
+                    const std::vector<int16_t> pcm = decodeBrrSampleForExport(panel.apuRam, startAddr);
+                    writeWavFile(*path, pcm, kBrrSampleRateHz);
+                }
+            }
+            ImGui::PopID();
         }
     }
     dirClipper.End();

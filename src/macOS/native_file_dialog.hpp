@@ -23,3 +23,8 @@ void removeDefaultWindowMenu();
 // Call once per frame from the main loop; returns the path chosen via the File > Open menu
 // item since the last call, or std::nullopt if none was chosen.
 std::optional<std::string> takeMenuOpenRomPath();
+
+// Shows the OS-native "Save File" panel (NSSavePanel on macOS), defaulting to `suggestedName`
+// and filtered to the .wav extension. Returns the chosen path, or std::nullopt if the user
+// cancelled or no native dialog is implemented for the current platform.
+std::optional<std::string> showSaveSampleDialog(const std::string& suggestedName);

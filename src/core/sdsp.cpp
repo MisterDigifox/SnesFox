@@ -380,6 +380,27 @@ void Sdsp::decodeBlock(size_t voiceIndex, const std::array<uint8_t, 65536>& aram
     }
 }
 
+std::vector<int16_t> decodeBrrSampleForExport(const std::array<uint8_t, 65536>& aram, uint16_t startAddr) {
+    std::vector<int16_t> out;
+    int16_t prev1 = 0;
+    int16_t prev2 = 0;
+    uint16_t addr = startAddr;
+    // Hard cap covers the full 64 KiB address space once, in case malformed/garbage data
+    // never sets an end bit (would otherwise loop forever wrapping through uint16_t addr).
+    for (int block = 0; block < 65536 / 9 + 1; ++block) {
+        const uint8_t header = aram[addr];
+        const int range = (header >> 4) & 0x0F;
+        const int filter = (header >> 2) & 0x03;
+        for (int i = 0; i < 16; ++i) {
+            const uint8_t packed = aram[static_cast<uint16_t>(addr + 1 + i / 2)];
+            out.push_back(decodeBrrNibble(packed, (i & 1) == 0, range, filter, prev1, prev2));
+        }
+        if ((header & 0x01) != 0) break; // end bit: single-shot export, not hardware's endless loop
+        addr = static_cast<uint16_t>(addr + 9);
+    }
+    return out;
+}
+
 void Sdsp::advanceVoice(size_t voiceIndex, const std::array<uint8_t, 65536>& aram) {
     Voice& v = m_voices[voiceIndex];
     if (!v.active) return;
