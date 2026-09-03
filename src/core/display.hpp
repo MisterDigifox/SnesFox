@@ -186,5 +186,14 @@ private:
     bool m_apuPaused = false; // toggled by the S-DSP Voices section's Pause/Resume button
     bool m_apuStepRequested = false;      // reset each frame in drawRightPanel, set by "Step"
     bool m_apuNextFrameRequested = false; // reset each frame in drawRightPanel, set by "Next Frame"
+
+    // Dir table "Save WAV" button's pitch-entry popup: -1 while closed, else the SRCN whose
+    // sample is pending export. OpenPopup() is deferred to m_pitchPromptOpenRequested so it's
+    // called from the same ID-stack level as BeginPopupModal (outside the DirTableScroll
+    // child), rather than from inside the child where the popup's clicked row lives.
+    int m_pitchPromptSrcn = -1;
+    uint16_t m_pitchPromptStartAddr = 0;
+    char m_pitchPromptBuffer[8] = "0000";
+    bool m_pitchPromptOpenRequested = false;
     bool m_hasFrameContent = false; // true once presentWithFrame has uploaded a real frame at least once
 };

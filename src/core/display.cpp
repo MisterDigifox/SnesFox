@@ -584,20 +584,53 @@ void Display::drawRightPanel(const DebugPanel& panel) {
 
             ImGui::SameLine();
             ImGui::PushID(srcn);
-            if (ImGui::SmallButton("Save WAV")) {
-                char suggestedName[32];
-                std::snprintf(suggestedName, sizeof(suggestedName), "srcn_%02X.wav", srcn);
-                const std::optional<std::string> path = showSaveSampleDialog(suggestedName);
-                if (path) {
-                    const std::vector<int16_t> pcm = decodeBrrSampleForExport(panel.apuRam, startAddr);
-                    writeWavFile(*path, pcm, kBrrSampleRateHz);
-                }
-            }
+            const bool saveClicked = ImGui::SmallButton("Save WAV");
             ImGui::PopID();
+            if (saveClicked) {
+                m_pitchPromptSrcn = srcn;
+                m_pitchPromptStartAddr = startAddr;
+                std::snprintf(m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer), "0000");
+                m_pitchPromptOpenRequested = true;
+            }
         }
     }
     dirClipper.End();
     ImGui::EndChild();
+
+    // Deferred from the button click above: OpenPopup must run at the same ID-stack level as
+    // BeginPopupModal below (outside DirTableScroll), not from inside the child the row lives in.
+    if (m_pitchPromptOpenRequested) {
+        ImGui::OpenPopup("Sample Pitch");
+        m_pitchPromptOpenRequested = false;
+    }
+    if (ImGui::BeginPopupModal("Sample Pitch", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("SRCN $%02X", m_pitchPromptSrcn);
+        ImGui::TextUnformatted("Pitch (hex, VxPITCH 14-bit; $1000 = native 32kHz rate):");
+        ImGui::InputText("##Pitch", m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer),
+                          ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase);
+
+        unsigned pitchValue = 0;
+        std::sscanf(m_pitchPromptBuffer, "%x", &pitchValue);
+        if (pitchValue == 0) pitchValue = 1;
+        const int sampleRate = static_cast<int>(kBrrSampleRateHz * pitchValue / 4096.0 + 0.5);
+        ImGui::Text("-> %d Hz sample rate", sampleRate);
+
+        if (ImGui::Button("Save WAV...")) {
+            char suggestedName[32];
+            std::snprintf(suggestedName, sizeof(suggestedName), "srcn_%02X.wav", m_pitchPromptSrcn);
+            const std::optional<std::string> path = showSaveSampleDialog(suggestedName);
+            if (path) {
+                const std::vector<int16_t> pcm = decodeBrrSampleForExport(panel.apuRam, m_pitchPromptStartAddr);
+                writeWavFile(*path, pcm, sampleRate);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     ImGui::SeparatorText("APU RAM (ARAM)");
     // Fixed height rather than GetContentRegionAvail(): by this point Palette + S-DSP Voices
