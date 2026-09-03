@@ -48,7 +48,7 @@ rm -f snesfox.exe SDL2.dll
   -lmingw32 \
   "${SDL2_ROOT}/lib/libSDL2main.a" \
   "${SDL2_ROOT}/lib/libSDL2.dll.a" \
-  -lcomdlg32 \
+  -lcomdlg32 -lwinmm \
   -static-libgcc -static-libstdc++ -static -lpthread
 
 # SDL2.dll is dynamically loaded at runtime — snesfox.exe won't start without it next to it.

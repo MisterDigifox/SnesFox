@@ -4,6 +4,11 @@
 #include <cstdint>
 #include <iostream>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#endif
+
 #include "apu.hpp"
 
 namespace {
@@ -14,6 +19,14 @@ constexpr int AUDIO_QUEUE_MAX_FRAMES = AUDIO_SAMPLE_RATE / 4;
 } // namespace
 
 AudioOutput::AudioOutput() {
+#ifdef _WIN32
+    // Windows' default ~15.6ms system timer resolution makes the main loop's SDL_Delay-paced
+    // frame timing (see emu_cli.cpp) too imprecise — the audio queue this feeds every frame
+    // intermittently underruns and crackles as a result. Request 1ms resolution for this
+    // process's lifetime instead (matched by timeEndPeriod in the destructor).
+    timeBeginPeriod(1);
+#endif
+
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         std::cerr << "SDL audio disabled: " << SDL_GetError() << "\n";
         return;
@@ -48,6 +61,9 @@ AudioOutput::~AudioOutput() {
         SDL_CloseAudioDevice(m_device);
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
     }
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
 }
 
 void AudioOutput::setPaused(bool paused) {

@@ -66,7 +66,7 @@ echo "Compiling"
   -lmingw32 \
   "${SDL2_ROOT}/lib/libSDL2main.a" \
   "${SDL2_ROOT}/lib/libSDL2.dll.a" \
-  -lcomdlg32 \
+  -lcomdlg32 -lwinmm \
   -static-libgcc -static-libstdc++ -static -lpthread
 
 echo "Removing previous Game directory"
