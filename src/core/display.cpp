@@ -589,7 +589,16 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             if (saveClicked) {
                 m_pitchPromptSrcn = srcn;
                 m_pitchPromptStartAddr = startAddr;
-                std::snprintf(m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer), "0000");
+                // Prefill with the first active voice currently playing this SRCN's real
+                // pitch, if any — that's what it's actually being heard at — else $0.
+                uint16_t defaultPitch = 0;
+                for (int v = 0; v < 8; ++v) {
+                    if (panel.dspActive[v] && panel.dspSrcn[v] == srcn) {
+                        defaultPitch = panel.dspPitch[v];
+                        break;
+                    }
+                }
+                std::snprintf(m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer), "%04X", defaultPitch);
                 m_pitchPromptOpenRequested = true;
             }
         }
