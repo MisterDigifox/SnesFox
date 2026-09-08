@@ -192,17 +192,28 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
                 // internal rate (audio_output.cpp).
                 constexpr double kAudioSampleRate = 32000.0;
                 constexpr double kTargetFps = 60.0988;
-                // A little slack (3 video frames' worth) so the audio device's own buffer
-                // never runs dry between our production bursts, without adding enough delay
-                // for input-lag to matter.
-                const uint32_t kHighWaterFrames = static_cast<uint32_t>(kAudioSampleRate / kTargetFps * 3.0);
+#ifdef _WIN32
+                // Windows' WASAPI/DirectSound scheduling jitter is coarser than macOS's
+                // CoreAudio — 3 frames' slack was tight enough to underrun constantly there
+                // (reported as permanent crackling on the SplitScrolling kiosk build). Give it
+                // more buffered audio to fall back on before the drain-wait below lets more
+                // through, at the cost of a bit more input-lag-equivalent audio latency.
+                constexpr double kHighWaterFrameSlack = 6.0;
+                constexpr double kMaxWaitFrameSlack = 2.0;
+#else
+                constexpr double kHighWaterFrameSlack = 3.0;
+                constexpr double kMaxWaitFrameSlack = 1.0;
+#endif
+                // A little slack so the audio device's own buffer never runs dry between our
+                // production bursts, without adding enough delay for input-lag to matter.
+                const uint32_t kHighWaterFrames = static_cast<uint32_t>(kAudioSampleRate / kTargetFps * kHighWaterFrameSlack);
                 // Safety cap: if audio isn't actually draining for any reason (no output
                 // device, muted, disconnected headphones, no live audio session at all) this
                 // must never block forever — fall back to proceeding anyway (accepting a
-                // possible audio glitch) rather than freezing the emulator. Capped at one
-                // video frame's worth so a non-draining audio device degrades to roughly the
-                // old timer-based cadence instead of running far slower.
-                const double kMaxWaitMs = 1000.0 / kTargetFps;
+                // possible audio glitch) rather than freezing the emulator. Degrades to roughly
+                // the old timer-based cadence (scaled by the slack above) instead of running far
+                // slower when a non-draining audio device is detected.
+                const double kMaxWaitMs = 1000.0 / kTargetFps * kMaxWaitFrameSlack;
                 const uint64_t perfFreq = SDL_GetPerformanceFrequency();
                 std::array<uint32_t, kFrameWords> localFrame;
 

@@ -14,7 +14,16 @@
 namespace {
 constexpr int AUDIO_SAMPLE_RATE = 32000;
 constexpr int AUDIO_CHANNELS = 2;
+#ifdef _WIN32
+// WASAPI/DirectSound's scheduling granularity is coarser than CoreAudio's — the 1024-sample
+// (32ms) buffer that's plenty of slack on macOS left too little headroom against Windows
+// driver/scheduler jitter, causing a constant crackle (reported on the SplitScrolling kiosk
+// build) rather than macOS's silence under the same feeder timing. Doubled here only; the
+// matching high-water/backlog-cap slack lives in emu_cli.cpp's bare-mode pacing loop.
+constexpr int AUDIO_DEVICE_SAMPLES = 2048;
+#else
 constexpr int AUDIO_DEVICE_SAMPLES = 1024;
+#endif
 constexpr int AUDIO_QUEUE_MAX_FRAMES = AUDIO_SAMPLE_RATE / 4;
 } // namespace
 
