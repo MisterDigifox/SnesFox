@@ -44,6 +44,18 @@ public:
     // never gets fresh joypad state during that stretch, making input feel completely dead.
     bool consumeVblankLatch() { return std::exchange(m_vblankLatchPending, false); }
 
+    // Set at the exact same VBlank edge as m_vblankLatchPending above, but consumed
+    // independently by the presentation loop: it's the signal that the framebuffer now holds
+    // a fully-rendered frame (every visible scanline drawn, none of the next frame's yet) and
+    // is safe to copy/present. Gating frame capture on a raw elapsed-cycle threshold instead
+    // (checked only between whole CPU instructions) let a single cycle-expensive instruction —
+    // chiefly a large GP-DMA transfer, whose stolen cycles are folded into that one instruction's
+    // reported cost — overshoot past the VBlank edge and into the next frame's active scanlines
+    // before the loop noticed and captured, tearing the copied framebuffer (old frame on top,
+    // new frame's already-rendered top rows below). Checking this flag after every instruction
+    // instead catches the edge itself, not some later point downstream of it.
+    bool consumeFrameReady() { return std::exchange(m_frameReadyPending, false); }
+
     // After stepPeripherals + optional triggerNmi/triggerIrq, call once per CPU step.
     // Wakes WAI on VBlank edges when NMITIMEN masks NMI (65C816 libs use WAI in WaitForVBlank).
     void syncWaiAfterVblankEdge(CPU& cpu);
@@ -108,6 +120,7 @@ private:
     mutable bool m_nmiFlag = false;
     bool             m_vblankWaiPending = false;
     bool             m_vblankLatchPending = false;
+    bool             m_frameReadyPending = false;
 
     // V/H counters (start at last line so first emulated scan step wraps 261→0 like post-reset HW)
     uint16_t m_hCounter   = 0;

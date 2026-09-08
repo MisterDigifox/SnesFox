@@ -11,7 +11,8 @@ clang++ -std=c++20 -O2 src/*.cpp src/core/*.cpp src/macOS/*.mm tests/*.cpp imgui
   -L/opt/homebrew/opt/sdl2/lib \
   -lSDL2 \
   -framework Cocoa \
-  -framework UniformTypeIdentifiers
+  -framework UniformTypeIdentifiers \
+  -framework CoreVideo
 
 # macOS: ad-hoc codesign avoids some machines killing unsigned local binaries (symptom: zsh: killed).
 if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then

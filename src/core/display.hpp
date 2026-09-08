@@ -141,6 +141,10 @@ public:
     // Left menu (ROM/CPU/PPU sections + instruction log) — game frame — right menu (palette).
     // Returns the pending palette edit (if the user hit Apply in the swatch editor popup this frame).
     PaletteEdit presentWithFrame(const uint32_t* pixels, const DebugPanel& panel);
+    // Bare-mode-only equivalent of presentWithFrame() that draws through the native NSView
+    // (native_game_view.mm) instead of SDL's renderer — see Display's constructor. No-op if
+    // the native view wasn't created (debug mode, or non-macOS platforms).
+    void presentNativeFrame(const uint32_t* pixels);
     // BG0-3/OAM visibility toggles from the Tiles Viewer panel (bit0-3 = BG0-3, bit4 = OAM) —
     // apply this to Ppu::setDebugLayerDisable each frame to hide the corresponding layer(s)
     // in the emulated game view.
@@ -158,20 +162,16 @@ private:
     void drawBottomPanel(const DebugPanel& panel);
     void drawGameInfoPanel(const DebugPanel& panel);
     void drawGsuDebugPanel(const DebugPanel& panel);
-    // Re-presents whatever's already in m_frameTex, rescaled to the window's *current* size.
-    // Installed as an SDL event watch so it also runs synchronously from inside SDL's Cocoa
-    // live-resize tracking loop, where processEvents()'s ordinary SDL_PollEvent doesn't return
-    // to the main loop until the mouse button is released — see the .cpp for detail.
-    void redrawDuringResize();
-    static int sdlEventWatch(void* userdata, SDL_Event* event);
     // Dir table "Play" button: queues `pcm` (mono S16) for immediate one-shot playback at
     // `sampleRateHz` on a dedicated SDL audio device, independent of the emulated game's own
     // AudioOutput. Lazily opens (or reopens, if the rate changed since the last call) that
     // device; a no-op if `pcm` is empty or the device can't be opened.
     void playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz);
 
-    SDL_Window*   m_window       = nullptr;
-    SDL_Renderer* m_renderer     = nullptr;
+    SDL_Window*   m_window       = nullptr; // debug mode only — bare mode never touches SDL video
+    SDL_Renderer* m_renderer     = nullptr; // debug mode only
+    void*         m_nativeWindowHandle = nullptr; // bare mode only — see native_window.mm
+    void*         m_nativeGameView = nullptr;     // bare mode only — see native_game_view.mm
     SDL_Texture*  m_frameTex     = nullptr; // 256×224 streaming texture
     SDL_Texture*  m_tileSheetTex = nullptr; // 128×1024 streaming texture for the Tiles Viewer (full VRAM)
     SDL_Texture*  m_gsuRamTex    = nullptr; // 256×256 streaming texture for the GSU RAM Viewer

@@ -72,6 +72,8 @@ void Bus::reset() {
     m_gsuIrqPending = false;
     m_reg420c = 0;
     m_vblankWaiPending = false;
+    m_vblankLatchPending = false;
+    m_frameReadyPending = false;
     m_vCounter   = 261;
     m_hCounter   = 0;
     m_cycleAccum = 0;
@@ -148,6 +150,9 @@ bool Bus::stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles) {
         // of that line (written when we entered oldV). If we ran HDMA for m_vCounter before this,
         // we would overwrite scroll with the next line's values and only one raster band would move.
         if (oldV < VBLANK_START) {
+#ifdef SNESFOX_DEBUG_HOFS_TRACE
+            fprintf(stderr, "HOFSTRACE line=%d bg1hofs=%u\n", static_cast<int>(oldV), m_ppu.bgHOFS(0));
+#endif
             m_ppu.renderScanline(static_cast<int>(oldV));
         }
 
@@ -174,6 +179,7 @@ bool Bus::stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles) {
             m_nmiFlag = true;
             m_vblankWaiPending = true;
             m_vblankLatchPending = true;
+            m_frameReadyPending = true;
             if (m_nmiEnabled) {
                 nmiReturn = true;
             }

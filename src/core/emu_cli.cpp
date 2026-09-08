@@ -1,13 +1,18 @@
 #include "emu_cli.hpp"
 
+#include <array>
+#include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include <SDL2/SDL.h>
 
@@ -18,6 +23,7 @@
 #include "debug_panel_builder.hpp"
 #include "display.hpp"
 #include "header.hpp"
+#include "../macOS/display_link.hpp"
 #include "../macOS/native_file_dialog.hpp"
 #include "opcodes.hpp"
 #include "rom.hpp"
@@ -93,9 +99,11 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
                     return 0;
                 }
 
-                display.beginFrame();
-                const DebugAction uiAction = display.drawControls(false);
-                if (uiAction != DebugAction::None) action = uiAction;
+                if (debugUi) {
+                    display.beginFrame();
+                    const DebugAction uiAction = display.drawControls(false);
+                    if (uiAction != DebugAction::None) action = uiAction;
+                }
                 if (action == DebugAction::LoadRom) {
                     romPath = display.pendingRomLoadPath();
                 }
@@ -103,9 +111,13 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
                     romPath = *menuPath;
                 }
 
-                DebugPanel panel;
-                panel.sections.push_back(DebugSection{"ROM", {"No ROM loaded : click Load to open a .sfc file"}});
-                display.presentWithFrame(nullptr, panel);
+                if (debugUi) {
+                    DebugPanel panel;
+                    panel.sections.push_back(DebugSection{"ROM", {"No ROM loaded : click Load to open a .sfc file"}});
+                    display.presentWithFrame(nullptr, panel);
+                } else {
+                    display.presentNativeFrame(nullptr);
+                }
 
                 waitingForRom = romPath.empty();
             }
@@ -155,109 +167,243 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
             }
         };
 
-        // Pace the loop to the SNES's real NTSC refresh rate rather than running
-        // as fast as the host CPU allows (SDL_RENDERER_PRESENTVSYNC alone isn't
-        // reliable pacing — it tracks the display's refresh rate, not 60.0988Hz,
-        // and some platforms/drivers ignore it entirely).
-        constexpr double kTargetFps = 60.0988;
-        const uint64_t perfFreq = SDL_GetPerformanceFrequency();
-        uint64_t frameStartPerf = SDL_GetPerformanceCounter();
+        if (!debugUi) {
+            // Bare game window: decouple emulation from presentation the way Mesen2's SDL
+            // renderer does — a dedicated emulation thread produces frames into a lock-protected
+            // buffer at a precise 60.0988Hz cadence; the main thread only pumps SDL events and
+            // hands the latest complete frame to presentWithFrame(), letting
+            // SDL_RENDERER_PRESENTVSYNC alone pace actual screen updates. No call site waits on
+            // both an independent software timer AND vsync at once, which is what let the two
+            // clocks drift out of phase with each other.
+            constexpr size_t kFrameWords = 256 * 224;
+            std::mutex frameMutex;
+            std::array<uint32_t, kFrameWords> sharedFrame{};
+            bool frameReady = false;
+            std::atomic<bool> stopEmuThread{false};
 
-        bool running = true;
-        while (running) {
-            DebugAction action = DebugAction::None;
-            running = display.processEvents(action);
+            std::thread emuThread([&]() {
+                // Paced by how much audio the hardware has actually consumed, not by a
+                // software wall-clock timer: SDL_Delay-until-a-calculated-deadline is at the
+                // mercy of OS thread-scheduler wake-up jitter (can be off by several ms under
+                // load, regardless of how precisely the target duration itself is computed —
+                // already tried, didn't help). The audio DAC's clock has none of that jitter,
+                // so blocking frame production on real queued-audio drain inherits that
+                // steadiness for free. AUDIO_SAMPLE_RATE here must match AudioOutput's own
+                // internal rate (audio_output.cpp).
+                constexpr double kAudioSampleRate = 32000.0;
+                constexpr double kTargetFps = 60.0988;
+                // A little slack (3 video frames' worth) so the audio device's own buffer
+                // never runs dry between our production bursts, without adding enough delay
+                // for input-lag to matter.
+                const uint32_t kHighWaterFrames = static_cast<uint32_t>(kAudioSampleRate / kTargetFps * 3.0);
+                // Safety cap: if audio isn't actually draining for any reason (no output
+                // device, muted, disconnected headphones, no live audio session at all) this
+                // must never block forever — fall back to proceeding anyway (accepting a
+                // possible audio glitch) rather than freezing the emulator. Capped at one
+                // video frame's worth so a non-draining audio device degrades to roughly the
+                // old timer-based cadence instead of running far slower.
+                const double kMaxWaitMs = 1000.0 / kTargetFps;
+                const uint64_t perfFreq = SDL_GetPerformanceFrequency();
+                std::array<uint32_t, kFrameWords> localFrame;
 
-            display.beginFrame();
-            const DebugAction uiAction = display.drawControls(paused);
-            if (uiAction != DebugAction::None) {
-                action = uiAction;
-            }
-            const bool suppressJoypad = display.wantsKeyboardCapture();
+                while (!stopEmuThread.load(std::memory_order_relaxed)) {
+                    // Break exactly on the VBlank edge (bus.consumeFrameReady(), checked after
+                    // every single instruction) rather than once a raw elapsed-cycle threshold
+                    // is crossed — see Bus::consumeFrameReady's doc comment: a cycle-count
+                    // threshold checked only between whole instructions let one cycle-expensive
+                    // instruction (chiefly a large GP-DMA transfer) overshoot past VBlank into
+                    // the next frame's active scanlines before this loop noticed, tearing the
+                    // framebuffer captured just below.
+                    bool frameComplete = false;
+                    while (!frameComplete) {
+                        const uint32_t pcBefore = cpu.pc24();
+                        cpu.step(bus);
+                        advanceCpuScheduling(bus, cpu, true, false);
+                        if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
+                        frameComplete = bus.consumeFrameReady();
+                    }
+                    audio.pump(bus.apu());
 
-            if (action == DebugAction::LoadRom) {
-                romPath = display.pendingRomLoadPath();
-                loadRequested = true;
-                running = false;
-                // Fall through to finish this frame normally (still need the matching
-                // presentWithFrame()/ImGui::Render() for the NewFrame() already started
-                // above via beginFrame() — skipping it here trips ImGui's own assertion
-                // on the next iteration's NewFrame() call after the ROM is swapped in).
-            }
-            if (const auto menuPath = takeMenuOpenRomPath()) {
-                romPath = *menuPath;
-                loadRequested = true;
-                running = false; // see the LoadRom comment above — same fall-through requirement
-            }
-            if (action == DebugAction::TogglePause) {
-                paused = !paused;
-                audio.setPaused(paused);
-            }
-            if (action == DebugAction::Reset) {
-                bus.reset();
-                cpu.reset(bus, resetVector);
-                instructionLog.clear();
-                audio.clearQueue();
-            }
-            if (action == DebugAction::StepOne && paused) {
-                stepOnce = true;
-            }
-            if (action == DebugAction::NextFrame && paused) {
-                nextFrameOnce = true;
-            }
+                    std::memcpy(localFrame.data(), bus.ppu().framebuffer(), sizeof(localFrame));
+                    {
+                        std::lock_guard<std::mutex> lock(frameMutex);
+                        sharedFrame = localFrame;
+                        frameReady = true;
+                    }
 
-            if (!paused) {
-                const uint64_t frameStartCycles = cpu.cycles();
-
-                while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
-                    const uint32_t pcBefore = cpu.pc24();
-                    cpu.step(bus);
-                    advanceCpuScheduling(bus, cpu, true, suppressJoypad);
-                    if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
+                    const uint64_t waitStartPerf = SDL_GetPerformanceCounter();
+                    while (audio.queuedFrameCount() > kHighWaterFrames && !stopEmuThread.load(std::memory_order_relaxed)) {
+                        const double waitedMs = static_cast<double>(SDL_GetPerformanceCounter() - waitStartPerf) * 1000.0 / static_cast<double>(perfFreq);
+                        if (waitedMs > kMaxWaitMs) break;
+                        SDL_Delay(1);
+                    }
                 }
-                audio.pump(bus.apu());
-            } else if (stepOnce) {
-                stepOnce = false;
+            });
 
-                const uint32_t pcBefore = cpu.pc24();
-                cpu.step(bus);
-                advanceCpuScheduling(bus, cpu, true, suppressJoypad);
-                logInstruction(pcBefore);
-                if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
-            } else if (nextFrameOnce) {
-                nextFrameOnce = false;
+            std::array<uint32_t, kFrameWords> presentFrame{};
+            bool hasPresented = false;
 
-                const uint64_t frameStartCycles = cpu.cycles();
-                while ((cpu.cycles() - frameStartCycles) < CYCLES_PER_FRAME) {
+            startDisplayLink();
+            bool keepGoing = true;
+            while (keepGoing) {
+                DebugAction action = DebugAction::None;
+                if (!display.processEvents(action)) {
+                    keepGoing = false;
+                }
+
+                if (action == DebugAction::LoadRom) {
+                    romPath = display.pendingRomLoadPath();
+                    loadRequested = true;
+                    keepGoing = false;
+                }
+                if (const auto menuPath = takeMenuOpenRomPath()) {
+                    romPath = *menuPath;
+                    loadRequested = true;
+                    keepGoing = false;
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(frameMutex);
+                    if (frameReady) {
+                        presentFrame = sharedFrame;
+                        hasPresented = true;
+                    }
+                }
+                // Block on the real hardware vsync tick (via CVDisplayLink), then draw through
+                // the native NSView (presentNativeFrame — see display.cpp's constructor and
+                // native_game_view.mm) instead of SDL's Metal renderer entirely.
+                waitForVsync();
+                if (hasPresented) {
+                    display.presentNativeFrame(presentFrame.data());
+                }
+            }
+            stopDisplayLink();
+
+            stopEmuThread.store(true, std::memory_order_relaxed);
+            emuThread.join();
+        } else {
+            // Pace the loop to the SNES's real NTSC refresh rate rather than running
+            // as fast as the host CPU allows (SDL_RENDERER_PRESENTVSYNC alone isn't
+            // reliable pacing — it tracks the display's refresh rate, not 60.0988Hz,
+            // and some platforms/drivers ignore it entirely).
+            constexpr double kTargetFps = 60.0988;
+            const uint64_t perfFreq = SDL_GetPerformanceFrequency();
+            uint64_t frameStartPerf = SDL_GetPerformanceCounter();
+
+            bool running = true;
+            while (running) {
+                DebugAction action = DebugAction::None;
+                running = display.processEvents(action);
+
+                display.beginFrame();
+                const DebugAction uiAction = display.drawControls(paused);
+                if (uiAction != DebugAction::None) {
+                    action = uiAction;
+                }
+                const bool suppressJoypad = display.wantsKeyboardCapture();
+
+                if (action == DebugAction::LoadRom) {
+                    romPath = display.pendingRomLoadPath();
+                    loadRequested = true;
+                    running = false;
+                    // Fall through to finish this frame normally (still need the matching
+                    // presentWithFrame()/ImGui::Render() for the NewFrame() already started
+                    // above via beginFrame() — skipping it here trips ImGui's own assertion
+                    // on the next iteration's NewFrame() call after the ROM is swapped in).
+                }
+                if (const auto menuPath = takeMenuOpenRomPath()) {
+                    romPath = *menuPath;
+                    loadRequested = true;
+                    running = false; // see the LoadRom comment above — same fall-through requirement
+                }
+                if (action == DebugAction::TogglePause) {
+                    paused = !paused;
+                    audio.setPaused(paused);
+                }
+                if (action == DebugAction::Reset) {
+                    bus.reset();
+                    cpu.reset(bus, resetVector);
+                    instructionLog.clear();
+                    audio.clearQueue();
+                }
+                if (action == DebugAction::StepOne && paused) {
+                    stepOnce = true;
+                }
+                if (action == DebugAction::NextFrame && paused) {
+                    nextFrameOnce = true;
+                }
+
+                if (!paused) {
+                    // See Bus::consumeFrameReady's doc comment (checked in the bare-mode loop
+                    // above too): break on the actual VBlank edge, not a raw elapsed-cycle
+                    // threshold, so a cycle-expensive instruction (large GP-DMA) can't overshoot
+                    // into the next frame's active scanlines before the framebuffer is read.
+                    bool frameComplete = false;
+                    while (!frameComplete) {
+                        const uint32_t pcBefore = cpu.pc24();
+                        cpu.step(bus);
+                        advanceCpuScheduling(bus, cpu, true, suppressJoypad);
+                        if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
+                        frameComplete = bus.consumeFrameReady();
+                    }
+                    audio.pump(bus.apu());
+                } else if (stepOnce) {
+                    stepOnce = false;
+
                     const uint32_t pcBefore = cpu.pc24();
                     cpu.step(bus);
                     advanceCpuScheduling(bus, cpu, true, suppressJoypad);
                     logInstruction(pcBefore);
                     if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
+                } else if (nextFrameOnce) {
+                    nextFrameOnce = false;
+
+                    bool frameComplete = false;
+                    while (!frameComplete) {
+                        const uint32_t pcBefore = cpu.pc24();
+                        cpu.step(bus);
+                        advanceCpuScheduling(bus, cpu, true, suppressJoypad);
+                        logInstruction(pcBefore);
+                        if (traceFile) traceFile << formatDisasmLine(pcBefore, cpu, false) << "\n";
+                        frameComplete = bus.consumeFrameReady();
+                    }
                 }
-            }
 
-            const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), bus, instructionLog, paused, debugUi);
-            const PaletteEdit paletteEdit = display.presentWithFrame(bus.ppu().framebuffer(), panel);
-            if (paletteEdit.applied) {
-                bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);
-            }
-            bus.ppu().setDebugLayerDisable(display.layerDisableMask());
-            bus.setApuPaused(display.apuPaused());
-            if (display.apuStepRequested()) {
-                bus.apu().step(APU_MANUAL_STEP_CYCLES);
-            }
-            if (display.apuNextFrameRequested()) {
-                bus.apu().step(CYCLES_PER_FRAME);
-            }
+                const auto panel = makeDebugPanel(headerLines, cpu, bus.ppu(), bus, instructionLog, paused, debugUi);
+                const PaletteEdit paletteEdit = display.presentWithFrame(bus.ppu().framebuffer(), panel);
+                if (paletteEdit.applied) {
+                    bus.ppu().setCgramEntry(paletteEdit.index, paletteEdit.bgr555);
+                }
+                bus.ppu().setDebugLayerDisable(display.layerDisableMask());
+                bus.setApuPaused(display.apuPaused());
+                if (display.apuStepRequested()) {
+                    bus.apu().step(APU_MANUAL_STEP_CYCLES);
+                }
+                if (display.apuNextFrameRequested()) {
+                    bus.apu().step(CYCLES_PER_FRAME);
+                }
 
-            const uint64_t frameEndPerf = SDL_GetPerformanceCounter();
-            const double elapsedMs = static_cast<double>(frameEndPerf - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
-            constexpr double kTargetFrameMs = 1000.0 / kTargetFps;
-            if (elapsedMs < kTargetFrameMs) {
-                SDL_Delay(static_cast<uint32_t>(kTargetFrameMs - elapsedMs));
+                double elapsedMs = static_cast<double>(SDL_GetPerformanceCounter() - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
+                constexpr double kTargetFrameMs = 1000.0 / kTargetFps;
+                if (elapsedMs < kTargetFrameMs) {
+                    // SDL_Delay only guarantees millisecond granularity; truncating the fractional
+                    // remainder here every frame made the loop run consistently a fraction of a
+                    // millisecond faster than 60.0988Hz. That drift slowly rotates each present call
+                    // through the display's real vsync phase, which showed up as a tear/judder whose
+                    // visible displacement scaled with how much on-screen content moved per frame —
+                    // most visible on fast parallax scrolling. Sleep the bulk of the remainder in
+                    // whole milliseconds (leaving a small margin), then spin the last fraction
+                    // against the performance counter for sub-millisecond precision.
+                    const double remainingMs = kTargetFrameMs - elapsedMs;
+                    if (remainingMs > 1.0) {
+                        SDL_Delay(static_cast<uint32_t>(remainingMs - 1.0));
+                    }
+                    do {
+                        elapsedMs = static_cast<double>(SDL_GetPerformanceCounter() - frameStartPerf) * 1000.0 / static_cast<double>(perfFreq);
+                    } while (elapsedMs < kTargetFrameMs);
+                }
+                frameStartPerf = SDL_GetPerformanceCounter();
             }
-            frameStartPerf = SDL_GetPerformanceCounter();
         }
 
         if (!loadRequested) {

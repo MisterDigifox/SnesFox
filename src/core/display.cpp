@@ -2,6 +2,9 @@
 #include "sdsp.hpp"
 #include "wav_writer.hpp"
 #include "../macOS/native_file_dialog.hpp"
+#include "../macOS/native_game_view.hpp"
+#include "../macOS/native_input.hpp"
+#include "../macOS/native_window.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -119,91 +122,80 @@ void applyModernDarkTheme() {
     c[ImGuiCol_DragDropTarget]       = accent;
 }
 
-// Decorative pillarbox/letterbox fill for fullscreen mode, in place of plain black bars.
-constexpr int CHECKER_CELL_SIZE = 28;
-constexpr SDL_Color CHECKER_DARK{38, 39, 44, 255};
-constexpr SDL_Color CHECKER_LIGHT{56, 58, 65, 255};
-
-void drawCheckerRect(SDL_Renderer* renderer, const SDL_Rect& area) {
-    if (area.w <= 0 || area.h <= 0) return;
-    for (int y = area.y; y < area.y + area.h; y += CHECKER_CELL_SIZE) {
-        for (int x = area.x; x < area.x + area.w; x += CHECKER_CELL_SIZE) {
-            const bool dark = ((x / CHECKER_CELL_SIZE) + (y / CHECKER_CELL_SIZE)) % 2 == 0;
-            const SDL_Color& c = dark ? CHECKER_DARK : CHECKER_LIGHT;
-            SDL_Rect cell{x, y,
-                          std::min(CHECKER_CELL_SIZE, area.x + area.w - x),
-                          std::min(CHECKER_CELL_SIZE, area.y + area.h - y)};
-            SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
-            SDL_RenderFillRect(renderer, &cell);
-        }
-    }
-}
 }
 
 Display::Display(const std::string& title, bool debugUi)
     : m_state(debugUi ? EmulatorState::EmulatorStateDebug : EmulatorState::EmulatorStateNormal) {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
-    }
-
     if (m_state == EmulatorState::EmulatorStateDebug) {
         m_windowWidth = TEXT_PANEL_X + PANEL_WIDTH;
         m_windowHeight = WINDOW_HEIGHT + BOTTOM_PANEL_HEIGHT;
+
+        // Debug UI keeps the original SDL2 + ImGui pipeline (imgui_impl_sdl2/sdlrenderer2 both
+        // fundamentally require an SDL_Window + SDL_Renderer) — see docs/tickets/06 for what
+        // it would take to bring this mode onto the native path bare mode uses below.
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+            throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
+        }
+        m_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                    m_windowWidth, m_windowHeight, SDL_WINDOW_SHOWN);
+        if (!m_window) {
+            SDL_Quit();
+            throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+        }
+        SDL_EventState(SDL_DROPFILE, SDL_ENABLE); // drag-and-drop / Finder "open with" a .sfc
+        m_renderer = SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!m_renderer) {
+            SDL_DestroyWindow(m_window);
+            m_window = nullptr;
+            SDL_Quit();
+            throw std::runtime_error(std::string("SDL_CreateRenderer failed: ") + SDL_GetError());
+        }
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr; // no persisted UI layout needed
+        ImGui::StyleColorsDark();
+        applyModernDarkTheme();
+        ImGui_ImplSDL2_InitForSDLRenderer(m_window, m_renderer);
+        ImGui_ImplSDLRenderer2_Init(m_renderer);
     } else {
         // Bare mode: window is exactly the scaled game frame, nothing else.
         m_windowWidth = GAME_DST_W;
         m_windowHeight = GAME_DST_H;
-    }
 
-    const bool isNormal = m_state == EmulatorState::EmulatorStateNormal;
-    const Uint32 windowFlags = SDL_WINDOW_SHOWN | (isNormal ? SDL_WINDOW_RESIZABLE : 0);
-    m_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                m_windowWidth, m_windowHeight, windowFlags);
-    if (!m_window) {
-        SDL_Quit();
-        throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+#ifdef __APPLE__
+        // No SDL video subsystem at all here — window, event pump, keyboard, and
+        // drag-and-drop are all plain Cocoa, matching Mesen2's own macOS architecture
+        // (confirmed from its source: Mesen2/InteropDLL/EmuApiWrapper.cpp never constructs
+        // SdlRenderer on __APPLE__, and Mesen2/MacOS/MacOSKeyManager.mm reads keys via
+        // NSEvent monitors, not SDL_PollEvent). SDL is reserved for AudioOutput only.
+        // See docs/tickets/01 through 05.
+        m_nativeWindowHandle = createNativeWindow(title, m_windowWidth, m_windowHeight, true);
+        installNativeWindowDelegate(m_nativeWindowHandle);
+        setNativeMinimumSize(m_nativeWindowHandle, 256, 224); // never shrink below the native SNES framebuffer size
+        m_nativeGameView = attachNativeGameView(m_nativeWindowHandle);
+        installNativeKeyMonitor();
+#endif
     }
-    if (isNormal) {
-        // Never shrink below the native SNES framebuffer size.
-        SDL_SetWindowMinimumSize(m_window, 256, 224);
-    }
-    SDL_EventState(SDL_DROPFILE, SDL_ENABLE); // drag-and-drop / Finder "open with" a .sfc
-    m_renderer = SDL_CreateRenderer(m_window, -1,
-                                    SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!m_renderer) {
-        SDL_DestroyWindow(m_window);
-        m_window = nullptr;
-        SDL_Quit();
-        throw std::runtime_error(std::string("SDL_CreateRenderer failed: ") + SDL_GetError());
-    }
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr; // no persisted UI layout needed
-    ImGui::StyleColorsDark();
-    applyModernDarkTheme();
-    ImGui_ImplSDL2_InitForSDLRenderer(m_window, m_renderer);
-    ImGui_ImplSDLRenderer2_Init(m_renderer);
-
-    // On macOS, dragging a window edge runs Cocoa's own live-resize tracking loop; SDL_PollEvent
-    // (called from processEvents()) doesn't return to the ordinary main loop until the mouse
-    // button is released, so without this the game view freezes mid-drag. SDL_AddEventWatch's
-    // callback, unlike SDL_PollEvent, fires synchronously from inside that nested loop too.
-    SDL_AddEventWatch(&Display::sdlEventWatch, this);
 }
 
 Display::~Display() {
-    SDL_DelEventWatch(&Display::sdlEventWatch, this);
-    ImGui_ImplSDLRenderer2_Shutdown();
-    ImGui_ImplSDL2_Shutdown();
-    ImGui::DestroyContext();
     if (m_previewAudioDevice != 0) SDL_CloseAudioDevice(m_previewAudioDevice);
-    if (m_frameTex)      SDL_DestroyTexture(m_frameTex);
-    if (m_tileSheetTex)  SDL_DestroyTexture(m_tileSheetTex);
-    if (m_gsuRamTex)     SDL_DestroyTexture(m_gsuRamTex);
-    if (m_renderer)  SDL_DestroyRenderer(m_renderer);
-    if (m_window)    SDL_DestroyWindow(m_window);
-    SDL_Quit();
+    if (m_state == EmulatorState::EmulatorStateDebug) {
+        ImGui_ImplSDLRenderer2_Shutdown();
+        ImGui_ImplSDL2_Shutdown();
+        ImGui::DestroyContext();
+        if (m_frameTex)      SDL_DestroyTexture(m_frameTex);
+        if (m_tileSheetTex)  SDL_DestroyTexture(m_tileSheetTex);
+        if (m_gsuRamTex)     SDL_DestroyTexture(m_gsuRamTex);
+        if (m_renderer)  SDL_DestroyRenderer(m_renderer);
+        if (m_window)    SDL_DestroyWindow(m_window);
+        SDL_Quit();
+    } else {
+#ifdef __APPLE__
+        removeNativeKeyMonitor();
+#endif
+    }
 }
 
 void Display::playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz) {
@@ -237,45 +229,33 @@ void Display::playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz) 
     SDL_PauseAudioDevice(m_previewAudioDevice, 0);
 }
 
-int Display::sdlEventWatch(void* userdata, SDL_Event* event) {
-    auto* self = static_cast<Display*>(userdata);
-    if (event->type == SDL_WINDOWEVENT &&
-        (event->window.event == SDL_WINDOWEVENT_RESIZED || event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) &&
-        event->window.windowID == SDL_GetWindowID(self->m_window)) {
-        self->redrawDuringResize();
-    }
-    return 0;
-}
-
-void Display::redrawDuringResize() {
-    // Only the bare game-only window benefits: the debug UI's panels/toolbar are ImGui widgets
-    // laid out relative to fixed panel constants, not something safe to redraw mid-drag outside
-    // the normal ImGui NewFrame/Render pairing. m_frameTex already holds the last frame this
-    // renderer uploaded (presentWithFrame keeps it alive across calls) — just rescale/re-blit it,
-    // no ImGui or CPU/PPU involvement needed.
-    if (m_state != EmulatorState::EmulatorStateNormal || m_fullscreen || !m_frameTex || !m_hasFrameContent) {
-        return;
-    }
-
-    SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
-
-    SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
-    SDL_RenderClear(m_renderer);
-
-    const float scale = std::min(static_cast<float>(m_windowWidth) / 256.0f,
-                                  static_cast<float>(m_windowHeight) / 224.0f);
-    SDL_Rect dst;
-    dst.w = static_cast<int>(256.0f * scale + 0.5f);
-    dst.h = static_cast<int>(224.0f * scale + 0.5f);
-    dst.x = (m_windowWidth - dst.w) / 2;
-    dst.y = (m_windowHeight - dst.h) / 2;
-    SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
-
-    SDL_RenderPresent(m_renderer);
-}
-
 bool Display::processEvents(DebugAction& action) {
     action = DebugAction::None;
+
+#ifdef __APPLE__
+    if (m_state == EmulatorState::EmulatorStateNormal) {
+        // No SDL video subsystem in bare mode (see the constructor) — pump AppKit's own event
+        // queue instead of SDL_PollEvent. See docs/tickets/02-native-event-loop.md.
+        pumpNativeEvents();
+        if (nativeWindowWantsClose(m_nativeWindowHandle)) return false;
+        if (takeNativeEscapePressed() && m_fullscreen) {
+            // Bare mode: Escape exits fullscreen instead of pausing — there's no
+            // toolbar/pause indicator in the bare window for this to make sense against.
+            m_fullscreen = false;
+            toggleNativeFullscreen(m_nativeWindowHandle);
+        }
+        if (takeNativeF11Pressed()) {
+            m_fullscreen = !m_fullscreen;
+            toggleNativeFullscreen(m_nativeWindowHandle);
+        }
+        if (const auto dropped = takeNativeDroppedRomPath()) {
+            m_pendingRomLoadPath = *dropped;
+            action = DebugAction::LoadRom;
+        }
+        return true;
+    }
+#endif
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
@@ -286,16 +266,7 @@ bool Display::processEvents(DebugAction& action) {
                     action = DebugAction::StepOne;
                     break;
                 case SDLK_ESCAPE:
-                    if (m_state == EmulatorState::EmulatorStateNormal) {
-                        // Normal mode: Escape exits fullscreen instead of pausing — there's no
-                        // toolbar/pause indicator in the bare window for this to make sense against.
-                        if (m_fullscreen) {
-                            m_fullscreen = false;
-                            SDL_SetWindowFullscreen(m_window, 0);
-                        }
-                    } else {
-                        action = DebugAction::TogglePause;
-                    }
+                    action = DebugAction::TogglePause;
                     break;
                 case SDLK_F11:
                     m_fullscreen = !m_fullscreen;
@@ -303,9 +274,6 @@ bool Display::processEvents(DebugAction& action) {
                     break;
             }
         }
-        // Covers both a live drag-and-drop onto the window and macOS's "open with" /
-        // double-click-a-.sfc-in-Finder launch (SDL's Cocoa backend turns the latter into
-        // this same event once SDL_Init has run, queued if it arrives before that).
         if (event.type == SDL_DROPFILE) {
             m_pendingRomLoadPath = event.drop.file;
             SDL_free(event.drop.file);
@@ -999,12 +967,20 @@ void Display::drawGsuDebugPanel(const DebugPanel& panel) {
     ImGui::End();
 }
 
+void Display::presentNativeFrame(const uint32_t* pixels) {
+    if (!m_nativeGameView) return;
+    presentNativeGameFrame(m_nativeGameView, pixels);
+}
+
 PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) {
-    // Bare/fullscreen windows are resizable (or change size via SDL_SetWindowFullscreen) —
-    // re-read the live size every frame rather than trusting the constructor's snapshot, so the
-    // framebuffer stretch below tracks the actual window.
-    if (m_state == EmulatorState::EmulatorStateNormal || m_fullscreen) {
+    // This function is debug-mode only now (bare mode renders through presentNativeFrame() —
+    // see docs/tickets/05-wire-up-and-cleanup.md), so m_state is always EmulatorStateDebug here.
+    // Fullscreen (F11) is still a debug-mode feature though (see processEvents()) — a debug
+    // session gone fullscreen re-reads the live window size every frame rather than trusting the
+    // constructor's snapshot, so the framebuffer stretch below tracks the actual window.
+    if (m_fullscreen) {
         SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
+        SDL_RenderSetLogicalSize(m_renderer, m_windowWidth, m_windowHeight);
     }
 
     // Create streaming texture once
@@ -1027,9 +1003,7 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
     if (m_frameTex && pixels) {
         SDL_UpdateTexture(m_frameTex, nullptr, pixels, 256 * static_cast<int>(sizeof(uint32_t)));
         m_hasFrameContent = true;
-        SDL_Rect dst = (m_state == EmulatorState::EmulatorStateDebug)
-            ? SDL_Rect{GAME_DST_X, std::max(0, (WINDOW_HEIGHT - GAME_DST_H) / 2), GAME_DST_W, GAME_DST_H}
-            : SDL_Rect{0, 0, m_windowWidth, m_windowHeight};
+        SDL_Rect dst{GAME_DST_X, std::max(0, (WINDOW_HEIGHT - GAME_DST_H) / 2), GAME_DST_W, GAME_DST_H};
         if (m_fullscreen) {
             // Fullscreen: always fill the full screen height (fractional scale, not snapped to
             // an integer multiple) so there's no letterboxing above/below — only pillarbox bars
@@ -1039,30 +1013,8 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
             dst.w = static_cast<int>(256.0f * scale + 0.5f);
             dst.x = (m_windowWidth - dst.w) / 2;
             dst.y = 0;
-        } else if (m_state == EmulatorState::EmulatorStateNormal) {
-            // Bare resizable window can be any size/aspect ratio — scale by the largest fractional
-            // factor that fits both dimensions (never distorting the 8:7 framebuffer) so the game
-            // always fills either the full width or full height, and letterbox/pillarbox only the
-            // unavoidable leftover with the black already cleared above.
-            const float scale = std::min(static_cast<float>(m_windowWidth) / 256.0f,
-                                          static_cast<float>(m_windowHeight) / 224.0f);
-            dst.w = static_cast<int>(256.0f * scale + 0.5f);
-            dst.h = static_cast<int>(224.0f * scale + 0.5f);
-            dst.x = (m_windowWidth - dst.w) / 2;
-            dst.y = (m_windowHeight - dst.h) / 2;
         }
         SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
-
-        if (m_fullscreen && m_state == EmulatorState::EmulatorStateNormal) {
-            // Decorative checker bars fill whatever pillarbox/letterbox space is left over
-            // around the integer-scaled frame, instead of leaving it plain black. Only shown
-            // for the non-debug (--debug-less) window — a debug session gone fullscreen keeps
-            // plain black bars since the checker pattern is meant as play-mode decoration.
-            drawCheckerRect(m_renderer, SDL_Rect{0, 0, dst.x, m_windowHeight});
-            drawCheckerRect(m_renderer, SDL_Rect{dst.x + dst.w, 0, m_windowWidth - (dst.x + dst.w), m_windowHeight});
-            drawCheckerRect(m_renderer, SDL_Rect{0, 0, m_windowWidth, dst.y});
-            drawCheckerRect(m_renderer, SDL_Rect{0, dst.y + dst.h, m_windowWidth, m_windowHeight - (dst.y + dst.h)});
-        }
     }
 
     if (m_state == EmulatorState::EmulatorStateDebug && !m_fullscreen) {

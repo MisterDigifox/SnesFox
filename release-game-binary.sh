@@ -27,7 +27,8 @@ clang++ -std=c++20 -O2 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\""
   -L/opt/homebrew/opt/sdl2/lib \
   -lSDL2 \
   -framework Cocoa \
-  -framework UniformTypeIdentifiers
+  -framework UniformTypeIdentifiers \
+  -framework CoreVideo
 
 # macOS: ad-hoc codesign avoids some machines killing unsigned local binaries (symptom: zsh: killed).
 if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then

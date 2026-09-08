@@ -105,3 +105,8 @@ void AudioOutput::pump(APU& apu) {
         std::cerr << "SDL_QueueAudio failed: " << SDL_GetError() << "\n";
     }
 }
+
+uint32_t AudioOutput::queuedFrameCount() const {
+    if (m_device == 0) return 0;
+    return SDL_GetQueuedAudioSize(m_device) / static_cast<uint32_t>(sizeof(Sdsp::PcmFrame));
+}
