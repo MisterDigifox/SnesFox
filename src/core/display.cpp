@@ -163,13 +163,15 @@ Display::Display(const std::string& title, bool debugUi)
         m_windowWidth = GAME_DST_W;
         m_windowHeight = GAME_DST_H;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
         // No SDL video subsystem at all here — window, event pump, keyboard, and
-        // drag-and-drop are all plain Cocoa, matching Mesen2's own macOS architecture
-        // (confirmed from its source: Mesen2/InteropDLL/EmuApiWrapper.cpp never constructs
-        // SdlRenderer on __APPLE__, and Mesen2/MacOS/MacOSKeyManager.mm reads keys via
-        // NSEvent monitors, not SDL_PollEvent). SDL is reserved for AudioOutput only.
-        // See docs/tickets/01 through 05.
+        // drag-and-drop are all plain native platform APIs (Cocoa on macOS, Win32 on
+        // Windows), matching Mesen2's own per-platform architecture (confirmed from its
+        // source: Mesen2/InteropDLL/EmuApiWrapper.cpp never constructs SdlRenderer on
+        // __APPLE__ or _WIN32, and MacOSKeyManager.mm/WindowsKeyManager.cpp both read keys
+        // via native APIs, not SDL_PollEvent). SDL is reserved for AudioOutput only.
+        // See docs/tickets/01 through 05 (written against macOS; src/windows/ mirrors the
+        // same native_window/native_game_view/native_input/display_link interfaces).
         m_nativeWindowHandle = createNativeWindow(title, m_windowWidth, m_windowHeight, true);
         installNativeWindowDelegate(m_nativeWindowHandle);
         setNativeMinimumSize(m_nativeWindowHandle, 256, 224); // never shrink below the native SNES framebuffer size
@@ -192,7 +194,7 @@ Display::~Display() {
         if (m_window)    SDL_DestroyWindow(m_window);
         SDL_Quit();
     } else {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
         removeNativeKeyMonitor();
 #endif
     }
@@ -232,10 +234,10 @@ void Display::playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz) 
 bool Display::processEvents(DebugAction& action) {
     action = DebugAction::None;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     if (m_state == EmulatorState::EmulatorStateNormal) {
-        // No SDL video subsystem in bare mode (see the constructor) — pump AppKit's own event
-        // queue instead of SDL_PollEvent. See docs/tickets/02-native-event-loop.md.
+        // No SDL video subsystem in bare mode (see the constructor) — pump the native platform's
+        // own event queue instead of SDL_PollEvent. See docs/tickets/02-native-event-loop.md.
         pumpNativeEvents();
         if (nativeWindowWantsClose(m_nativeWindowHandle)) return false;
         if (takeNativeEscapePressed() && m_fullscreen) {

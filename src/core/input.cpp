@@ -2,7 +2,7 @@
 
 #include <SDL2/SDL.h>
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
 #include "../macOS/native_input.hpp"
 #endif
 
@@ -12,12 +12,13 @@
 // thread's own event loop (display.processEvents()) already pumps every video frame via
 // SDL_PollEvent, so the keyboard-state array this reads is kept fresh regardless.
 //
-// macOS bare mode never initializes SDL's video subsystem (see docs/tickets/01), so
-// SDL_GetKeyboardState has nothing to read there — isNativeInputActive() is true instead, and
-// native_input.mm's own key-state array (kept fresh by its own event pump) is read instead.
+// Bare mode never initializes SDL's video subsystem on macOS or Windows (see docs/tickets/01
+// for macOS's case), so SDL_GetKeyboardState has nothing to read there — isNativeInputActive()
+// is true instead, and the platform's own native_input.mm/.cpp key-state array (kept fresh by
+// its own event pump) is read instead.
 uint16_t sampleJoy1(bool suppress) {
     if (suppress) return 0;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     if (isNativeInputActive()) {
         uint16_t joy = 0;
         if (isNativeKeyDown(NativeKey::kB)) joy |= 0x8000; // B
@@ -54,7 +55,7 @@ uint16_t sampleJoy1(bool suppress) {
 
 uint16_t sampleJoy2(bool suppress) {
     if (suppress) return 0;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     if (isNativeInputActive()) {
         uint16_t joy = 0;
         if (isNativeKeyDown(NativeKey::k2)) joy |= 0x8000; // B

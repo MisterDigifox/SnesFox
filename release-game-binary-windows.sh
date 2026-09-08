@@ -11,9 +11,9 @@ set -e
 # official "mingw devel" tarball from SDL's GitHub releases the first time it runs
 # and caches it under .cache/SDL2-mingw/ (gitignored).
 #
-# Windows has no NSOpenPanel/Cocoa menu bar equivalent to src/macOS/native_file_dialog.mm,
-# so this links src/windows/native_file_dialog.cpp instead (native GetOpenFileName dialog,
-# no-op menu-bar hooks) against the same shared native_file_dialog.hpp interface.
+# src/windows/*.cpp mirrors src/macOS/*.mm's native (non-SDL) bare-mode window/input/rendering
+# path (see release-emu-binary-windows.sh for the fuller comment) — this kiosk binary always
+# runs in bare mode, so it goes through that same native path.
 
 if [ -z "$1" ]; then
   echo "Erreur: ROM_SRC requis en paramètre." >&2
@@ -55,7 +55,7 @@ xxd -i "$ROM_SRC" \
 rm -f "$ROM_NAME.exe" SDL2.dll
 
 echo "Compiling"
-"$MINGW_CXX" -std=c++20 -O2 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" \
+"$MINGW_CXX" -std=c++20 -O2 -DUNICODE -D_UNICODE -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" \
   src/game/main_game.cpp src/core/*.cpp src/windows/*.cpp tests/*.cpp imgui/*.cpp imgui/backends/*.cpp \
   -o "$ROM_NAME.exe" \
   -I. \
@@ -66,7 +66,7 @@ echo "Compiling"
   -lmingw32 \
   "${SDL2_ROOT}/lib/libSDL2main.a" \
   "${SDL2_ROOT}/lib/libSDL2.dll.a" \
-  -lcomdlg32 -lwinmm \
+  -lcomdlg32 -lwinmm -luser32 -lgdi32 -lshell32 -ldwmapi \
   -static-libgcc -static-libstdc++ -static -lpthread
 
 echo "Removing previous Game directory"

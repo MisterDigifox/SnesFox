@@ -29,9 +29,10 @@ bool takeNativeEscapePressed();
 bool takeNativeF11Pressed();
 
 // Virtual keycodes for the specific physical keys sampleJoy1()/sampleJoy2() (src/core/input.cpp)
-// already map to via SDL_SCANCODE_* — same keys, same positions, just macOS's own numbering
-// instead of SDL's, so no behavior changes for players using the emulator.
+// already map to via SDL_SCANCODE_* — same keys, same positions, just each native platform's
+// own numbering instead of SDL's, so no behavior changes for players using the emulator.
 namespace NativeKey {
+#ifdef __APPLE__
 constexpr int kA      = 0x00;
 constexpr int kB      = 0x0B;
 constexpr int kX      = 0x07;
@@ -55,4 +56,32 @@ constexpr int k8      = 0x1C;
 constexpr int k9      = 0x19;
 constexpr int k0      = 0x1D;
 constexpr int kRShift = 0x3C;
+#elif defined(_WIN32)
+// Windows virtual-key codes (VK_*, per winuser.h) — 'A'-'Z'/'0'-'9' equal their ASCII
+// uppercase/digit codes on Windows, so no <windows.h> include is needed just for these
+// literals (native_input.cpp includes it for the VK_* constants used elsewhere).
+constexpr int kA      = 0x41; // 'A'
+constexpr int kB      = 0x42; // 'B'
+constexpr int kX      = 0x58; // 'X'
+constexpr int kY      = 0x59; // 'Y'
+constexpr int kL      = 0x4C; // 'L'
+constexpr int kR      = 0x52; // 'R'
+constexpr int kReturn = 0x0D; // VK_RETURN
+constexpr int kSpace  = 0x20; // VK_SPACE
+constexpr int kUp     = 0x26; // VK_UP
+constexpr int kDown   = 0x28; // VK_DOWN
+constexpr int kLeft   = 0x25; // VK_LEFT
+constexpr int kRight  = 0x27; // VK_RIGHT
+constexpr int k1      = 0x31; // '1'
+constexpr int k2      = 0x32;
+constexpr int k3      = 0x33;
+constexpr int k4      = 0x34;
+constexpr int k5      = 0x35;
+constexpr int k6      = 0x36;
+constexpr int k7      = 0x37;
+constexpr int k8      = 0x38;
+constexpr int k9      = 0x39;
+constexpr int k0      = 0x30;
+constexpr int kRShift = 0xA1; // VK_RSHIFT
+#endif
 } // namespace NativeKey

@@ -10,9 +10,13 @@ set -e
 # official "mingw devel" tarball from SDL's GitHub releases the first time it runs
 # and caches it under .cache/SDL2-mingw/ (gitignored).
 #
-# Windows has no NSOpenPanel/Cocoa menu bar equivalent to src/macOS/native_file_dialog.mm,
-# so this links src/windows/native_file_dialog.cpp instead (native GetOpenFileName dialog,
-# no-op menu-bar hooks) against the same shared native_file_dialog.hpp interface.
+# src/windows/*.cpp mirrors src/macOS/*.mm's native (non-SDL) bare-mode window/input/rendering
+# path against the same shared native_window/native_game_view/native_input/display_link/
+# native_file_dialog .hpp interfaces (declared under src/macOS/ since that's where they were
+# first written): a plain Win32 window + WndProc, GetAsyncKeyState-polled input, a GDI
+# StretchDIBits blit, and DwmFlush() for vsync (-ldwmapi) instead of Cocoa/CVDisplayLink.
+# -luser32 -lgdi32 -lshell32 are needed for those direct WinAPI calls (window/GDI/drag-and-drop);
+# SDL2 itself is still linked for --debug mode's ImGui backend and for AudioOutput.
 
 MINGW_TRIPLE="x86_64-w64-mingw32"
 MINGW_CXX="${MINGW_TRIPLE}-g++"
@@ -37,7 +41,7 @@ fi
 
 rm -f snesfox.exe SDL2.dll
 
-"$MINGW_CXX" -std=c++20 -O2 \
+"$MINGW_CXX" -std=c++20 -O2 -DUNICODE -D_UNICODE \
   src/*.cpp src/core/*.cpp src/windows/*.cpp tests/*.cpp imgui/*.cpp imgui/backends/*.cpp \
   -o snesfox.exe \
   -I. \
@@ -48,7 +52,7 @@ rm -f snesfox.exe SDL2.dll
   -lmingw32 \
   "${SDL2_ROOT}/lib/libSDL2main.a" \
   "${SDL2_ROOT}/lib/libSDL2.dll.a" \
-  -lcomdlg32 -lwinmm \
+  -lcomdlg32 -lwinmm -luser32 -lgdi32 -lshell32 -ldwmapi \
   -static-libgcc -static-libstdc++ -static -lpthread
 
 # SDL2.dll is dynamically loaded at runtime — snesfox.exe won't start without it next to it.
