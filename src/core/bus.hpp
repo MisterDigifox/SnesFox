@@ -103,6 +103,17 @@ public:
     const std::vector<uint8_t>& gsuWorkRam() const { return m_gsuRam; }
 
 private:
+    // Mapped-address decode, factored out of read() so the public entry point can latch every
+    // transferred byte (mapped or not) into m_openBus before returning it — see read()'s comment.
+    uint8_t readMapped(uint8_t bank, uint16_t addr) const;
+
+    // Real hardware has no pull-down on unmapped bus regions: a read there returns whatever byte
+    // was last driven onto the data bus by the previous transfer (mapped read, unmapped read, or
+    // write), not a clean 0x00. Tracking that last-driven byte here and returning it from
+    // readMapped()'s unmapped fallthrough reproduces that "open bus" garbage instead of the
+    // stricter-than-hardware 0x00 this emulator returned before.
+    mutable uint8_t m_openBus = 0;
+
     const std::vector<uint8_t>& m_rom;
 
     // 128 KB WRAM

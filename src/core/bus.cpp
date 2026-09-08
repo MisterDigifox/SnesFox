@@ -65,6 +65,7 @@ Bus::~Bus() {
 void Bus::reset() {
     m_wram.fill(0);
     m_wramAddr = 0;
+    m_openBus = 0;
     m_apu.reset();
     m_ppu.reset();
     m_dma.reset();
@@ -284,6 +285,12 @@ unsigned Bus::accessSpeedCycles(uint8_t bank, uint16_t addr) const {
 }
 
 uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
+    const uint8_t value = readMapped(bank, addr);
+    m_openBus = value;
+    return value;
+}
+
+uint8_t Bus::readMapped(uint8_t bank, uint16_t addr) const {
     // ------------------------------------------------------------
     // WRAM full banks
     // ------------------------------------------------------------
@@ -448,10 +455,16 @@ uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
         }
     }
 
-    return 0x00;
+    // Unmapped region — real hardware has no pull-down here, it returns whatever byte was last
+    // driven onto the data bus by the previous transfer. See m_openBus's doc comment.
+    return m_openBus;
 }
 
 void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
+    // Every write drives its byte onto the data bus regardless of whether anything is mapped
+    // there to receive it — see m_openBus's doc comment.
+    m_openBus = value;
+
     // ------------------------------------------------------------
     // WRAM full banks
     // ------------------------------------------------------------
