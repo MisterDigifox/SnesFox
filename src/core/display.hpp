@@ -156,6 +156,10 @@ public:
     // was clicked — advance the APU by a small/one-frame cycle count, then let it refreeze.
     bool apuStepRequested() const { return m_apuStepRequested; }
     bool apuNextFrameRequested() const { return m_apuNextFrameRequested; }
+    // The native platform window handle backing this Display — an HWND on Windows (bare
+    // mode's own native window, or extracted from the SDL window in debug-UI mode), nullptr
+    // on macOS. Windows' AudioOutput (DirectSound) needs this for SetCooperativeLevel.
+    void* nativeWindowHandle() const;
 private:
     void drawLeftPanel(const std::vector<DebugSection>& sections, const std::vector<std::string>& instructionLog);
     void drawRightPanel(const DebugPanel& panel);

@@ -81,7 +81,7 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
 #else
     installOpenRomMenu(); // native File > Open ROM… menu item, works in both debug and bare mode
 #endif
-    AudioOutput audio;
+    AudioOutput audio(display.nativeWindowHandle());
 
     std::string romPath = initialRomPath;
 

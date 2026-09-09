@@ -1,5 +1,8 @@
 #include "display.hpp"
 #include "sdsp.hpp"
+#ifdef _WIN32
+#include <SDL_syswm.h>
+#endif
 #include "wav_writer.hpp"
 #include "../macOS/native_file_dialog.hpp"
 #include "../macOS/native_game_view.hpp"
@@ -198,6 +201,20 @@ Display::~Display() {
         removeNativeKeyMonitor();
 #endif
     }
+}
+
+void* Display::nativeWindowHandle() const {
+    if (m_nativeWindowHandle) return m_nativeWindowHandle; // bare mode: already an HWND on Windows
+#ifdef _WIN32
+    if (m_window) {
+        SDL_SysWMinfo wmInfo;
+        SDL_VERSION(&wmInfo.version);
+        if (SDL_GetWindowWMInfo(m_window, &wmInfo)) {
+            return static_cast<void*>(wmInfo.info.win.window);
+        }
+    }
+#endif
+    return nullptr;
 }
 
 void Display::playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz) {
