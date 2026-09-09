@@ -103,12 +103,18 @@ uint16_t sampleController(SDL_GameController* pad) {
 // for macOS's case), so SDL_GetKeyboardState has nothing to read there — isNativeInputActive()
 // is true instead, and the platform's own native_input.mm/.cpp key-state array (kept fresh by
 // its own event pump) is read instead.
+//
+// Keyboard and pad are OR'd together rather than the pad taking exclusive priority when
+// present: a real-world Windows report showed a wired Xbox pad getting SDL_GameControllerOpen'd
+// successfully (padFor() returning non-null) while its button/axis state never actually read as
+// pressed — with the old early-return-on-pad-present logic that silently locked out the keyboard
+// too, since the branch below never ran. OR'ing means a misbehaving/idle pad can never block the
+// keyboard fallback, at the cost of only mattering if someone's mashing both at once.
 uint16_t sampleJoy1(bool suppress) {
     if (suppress) return 0;
-    if (SDL_GameController* pad = padFor(0)) return sampleController(pad);
+    uint16_t joy = 0;
 #if defined(__APPLE__) || defined(_WIN32)
     if (isNativeInputActive()) {
-        uint16_t joy = 0;
         if (isNativeKeyDown(NativeKey::kB)) joy |= 0x8000; // B
         if (isNativeKeyDown(NativeKey::kY)) joy |= 0x4000; // Y
         if (isNativeKeyDown(NativeKey::kSpace)) joy |= 0x2000; // Select
@@ -121,11 +127,9 @@ uint16_t sampleJoy1(bool suppress) {
         if (isNativeKeyDown(NativeKey::kX)) joy |= 0x0040; // X
         if (isNativeKeyDown(NativeKey::kL)) joy |= 0x0020; // L
         if (isNativeKeyDown(NativeKey::kR)) joy |= 0x0010; // R
-        return joy;
-    }
+    } else {
 #endif
     const uint8_t* k = SDL_GetKeyboardState(nullptr);
-    uint16_t joy = 0;
     if (k[SDL_SCANCODE_B]) joy |= 0x8000; // B
     if (k[SDL_SCANCODE_Y]) joy |= 0x4000; // Y
     if (k[SDL_SCANCODE_SPACE]) joy |= 0x2000; // Select
@@ -138,15 +142,18 @@ uint16_t sampleJoy1(bool suppress) {
     if (k[SDL_SCANCODE_X]) joy |= 0x0040; // X
     if (k[SDL_SCANCODE_L]) joy |= 0x0020; // L
     if (k[SDL_SCANCODE_R]) joy |= 0x0010; // R
+#if defined(__APPLE__) || defined(_WIN32)
+    }
+#endif
+    if (SDL_GameController* pad = padFor(0)) joy |= sampleController(pad);
     return joy;
 }
 
 uint16_t sampleJoy2(bool suppress) {
     if (suppress) return 0;
-    if (SDL_GameController* pad = padFor(1)) return sampleController(pad);
+    uint16_t joy = 0;
 #if defined(__APPLE__) || defined(_WIN32)
     if (isNativeInputActive()) {
-        uint16_t joy = 0;
         if (isNativeKeyDown(NativeKey::k2)) joy |= 0x8000; // B
         if (isNativeKeyDown(NativeKey::k4)) joy |= 0x4000; // Y
         if (isNativeKeyDown(NativeKey::kRShift)) joy |= 0x2000; // Select
@@ -159,11 +166,9 @@ uint16_t sampleJoy2(bool suppress) {
         if (isNativeKeyDown(NativeKey::k3)) joy |= 0x0040; // X
         if (isNativeKeyDown(NativeKey::k5)) joy |= 0x0020; // L
         if (isNativeKeyDown(NativeKey::k6)) joy |= 0x0010; // R
-        return joy;
-    }
+    } else {
 #endif
     const uint8_t* k = SDL_GetKeyboardState(nullptr);
-    uint16_t joy = 0;
     if (k[SDL_SCANCODE_2]) joy |= 0x8000; // B
     if (k[SDL_SCANCODE_4]) joy |= 0x4000; // Y
     if (k[SDL_SCANCODE_RSHIFT]) joy |= 0x2000; // Select
@@ -176,5 +181,9 @@ uint16_t sampleJoy2(bool suppress) {
     if (k[SDL_SCANCODE_3]) joy |= 0x0040; // X
     if (k[SDL_SCANCODE_5]) joy |= 0x0020; // L
     if (k[SDL_SCANCODE_6]) joy |= 0x0010; // R
+#if defined(__APPLE__) || defined(_WIN32)
+    }
+#endif
+    if (SDL_GameController* pad = padFor(1)) joy |= sampleController(pad);
     return joy;
 }
