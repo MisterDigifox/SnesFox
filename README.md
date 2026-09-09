@@ -5,12 +5,34 @@ SnesFox is a SNES emulator that runs your Super Nintendo game ROMs, including Su
 ## Project layout
 
 - `src/main.cpp` — entry point.
-- `src/core/` — the emulator core (`cpu`/`ppu`/`apu`/`spc700`/`sdsp`/`gsu`/`dma`/`bus`/`rom`/`header`), the disassembler/reassembler (`disasm_dump`/`reasm`), the Dear ImGui debug UI (`display`), and app wiring (`snesfox_app`).
-- `src/macOS/` — the native `NSOpenPanel` file dialog and File > Open ROM… menu (Objective-C++).
+- `src/core/` — the emulator core (`cpu`/`ppu`/`apu`/`spc700`/`sdsp`/`gsu`/`dma`/`bus`/`rom`/`header`), the disassembler/reassembler (`disasm_dump`/`reasm`), the Dear ImGui debug UI (`display`), app wiring (`snesfox_app`), and the SDL2 audio backend (`audio_output.cpp`, macOS).
+- `src/macOS/` — bare-mode's native window/input/rendering/vsync (Cocoa `NSWindow`/`NSView`, CoreGraphics blit, `CVDisplayLink`) and the native `NSOpenPanel` file dialog / File > Open ROM… menu (Objective-C++).
+- `src/windows/` — the same bare-mode interfaces, implemented natively for Windows instead: a plain Win32 window (`CreateWindowExW`/`WndProc`), `GetAsyncKeyState`-polled input, a GDI `StretchDIBits` blit, `DwmFlush()` for vsync, and a DirectSound audio backend (`audio_output_directsound.cpp`) in place of macOS's SDL2 one — see [Platform backends](#platform-backends) below.
 - `imgui/` — vendored Dear ImGui, compiled straight into the binary.
 - `tests/` — hand-written CPU/PPU/S-DSP regression tests, run via `./snesfox selftest`.
 - `roms/` — prebuilt fixture ROMs (PVSnesLib demos, `hello_world.sfc`, etc.) used for manual and scripted testing.
 - `tools/` — standalone Python helpers (opcode-table generation, BG3 CHR heuristic check, app icon generation).
+
+## Platform backends
+
+The debug UI (`--debug`) is SDL2 on both platforms — a plain `SDL_CreateWindow` + accelerated
+`SDL_Renderer`, with Dear ImGui's SDL2 backend on top. The bare game-only window (no `--debug`)
+skips SDL entirely and goes native, with a different backend per platform for window, input,
+rendering, vsync, and audio:
+
+| | macOS | Windows |
+|---|---|---|
+| Window | Cocoa (`NSWindow`/`NSView`) | Win32 (`CreateWindowExW`/`WndProc`) |
+| Input | `NSEvent` local monitor | `GetAsyncKeyState` polling |
+| Rendering | CoreGraphics (`CGContextDrawImage`) | GDI (`StretchDIBits`) |
+| Vsync | `CVDisplayLink` | `DwmFlush()` |
+| Audio (both modes) | SDL2 (`SDL_QueueAudio`) | DirectSound (`IDirectSoundBuffer8`) |
+
+Audio is the one piece that isn't native-per-platform-in-bare-mode-only — it uses the same
+backend in both debug and bare mode, and Windows uses DirectSound instead of SDL2 specifically
+(SDL2's own WASAPI/DirectSound backend selection and buffer negotiation was a source of audio
+crackle/distortion on Windows that switching to DirectSound directly resolved — matching what
+Mesen2 itself does on Windows).
 
 ## Installation
 
