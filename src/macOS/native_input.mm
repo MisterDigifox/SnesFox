@@ -27,8 +27,16 @@ void installNativeKeyMonitor() {
     g_keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:mask handler:^NSEvent*(NSEvent* event) {
         if ([event type] == NSEventTypeKeyDown) {
             setKey(static_cast<int>([event keyCode]), true);
+            // We've already recorded the key state above; nothing downstream (no NSView
+            // overrides keyDown: in bare mode) will otherwise handle this event, and an
+            // unhandled keyDown: falls through to NSResponder's default implementation, which
+            // beeps. Swallow plain keys (joypad/emulator controls) so they never reach that
+            // fallback. Cmd-chord events (Cmd+O, Cmd+Q, Cmd+W, ...) still need to flow through
+            // to NSApp's menu key-equivalent matching, so let those continue.
+            if (([event modifierFlags] & NSEventModifierFlagCommand) == 0) return nil;
         } else if ([event type] == NSEventTypeKeyUp) {
             setKey(static_cast<int>([event keyCode]), false);
+            if (([event modifierFlags] & NSEventModifierFlagCommand) == 0) return nil;
         } else if ([event type] == NSEventTypeFlagsChanged) {
             // Modifier keys (Shift/Control/etc.) never generate KeyDown/KeyUp — only the
             // physical key that changed is in `keyCode`, and whether it's now up or down has
