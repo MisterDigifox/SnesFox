@@ -29,6 +29,10 @@
 #include "rom.hpp"
 #include "rom_cli_helpers.hpp"
 
+#ifdef _WIN32
+#include "../windows/direct_input_manager.hpp"
+#endif
+
 // Window title / app name. Overridden at compile time by release-game-binary.sh
 // (-DSNESFOX_APP_NAME="\"RomName\"") so kiosk builds show the embedded game's name instead.
 #ifndef SNESFOX_APP_NAME
@@ -82,6 +86,13 @@ int runEmu(const std::string& initialRomPath, bool writeTrace, bool debugUi) {
     installOpenRomMenu(); // native File > Open ROM… menu item, works in both debug and bare mode
 #endif
     AudioOutput audio(display.nativeWindowHandle());
+#ifdef _WIN32
+    // Same handle AudioOutput above just took (bare mode's own HWND, or one pulled out of the
+    // SDL window in --debug mode) — DirectInput8's cooperative level needs a window the same
+    // way DirectSound's did. See src/windows/native_gamepad.hpp for why controller input on
+    // Windows goes through XInput/DirectInput directly instead of SDL_GameController.
+    DirectInputManager::initialize(static_cast<HWND>(display.nativeWindowHandle()));
+#endif
 
     std::string romPath = initialRomPath;
 

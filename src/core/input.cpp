@@ -6,15 +6,31 @@
 #include "../macOS/native_input.hpp"
 #endif
 
+#ifdef _WIN32
+#include "../windows/native_gamepad.hpp"
+#endif
+
+// Controller input forks by platform below: Windows talks to XInput/DirectInput directly
+// (src/windows/native_gamepad.*) rather than through SDL_GameController, because SDL only
+// delivers joystick/controller state while it believes the app has OS focus — tracked via
+// windows *it* created with SDL_CreateWindow. Bare mode's window is a plain native HWND
+// (native_window.cpp), so SDL never sees it as focused there and silently drops every
+// button/axis update (pad opens fine via SDL_GameControllerOpen, but nothing ever reads as
+// pressed). Mesen2 avoids the same problem on Windows the same way (XInputManager.cpp +
+// DirectInputManager.cpp, no SDL involved). macOS doesn't hit this — its SDL backend checks
+// focus via NSApplication's own isActive state rather than SDL-tracked windows — so it keeps
+// using SDL_GameController below.
+#ifndef _WIN32
+
 namespace {
 
 // Lazily turns on SDL's game-controller subsystem (which pulls in the joystick subsystem too)
-// on first use, rather than unconditionally in Display's constructor — bare mode on
-// macOS/Windows never touches SDL video at all (see display.cpp), so this is the only place
-// that ever needs it. Must keep running on whichever thread actually samples input (the
-// dedicated emulation thread in bare mode, the main thread in --debug) since SDL expects
-// joystick/controller polling to stay on the thread that opened the device — sampleJoy1/2 are
-// always called from that same single thread for the life of a session, so this holds.
+// on first use, rather than unconditionally in Display's constructor — bare mode on macOS
+// never touches SDL video at all (see display.cpp), so this is the only place that ever needs
+// it. Must keep running on whichever thread actually samples input (the dedicated emulation
+// thread in bare mode, the main thread in --debug) since SDL expects joystick/controller
+// polling to stay on the thread that opened the device — sampleJoy1/2 are always called from
+// that same single thread for the life of a session, so this holds.
 void ensureControllerSubsystem() {
     static bool initialized = false;
     if (initialized) return;
@@ -26,7 +42,7 @@ void ensureControllerSubsystem() {
 
 // Assigns up to 2 pads to P1/P2, first-come-first-served by SDL joystick index, re-scanned on
 // every call so a pad plugged in mid-session gets picked up without a restart — bare mode on
-// macOS/Windows never pumps SDL events (see display.cpp's processEvents), so there's no
+// macOS never pumps SDL events (see display.cpp's processEvents), so there's no
 // SDL_CONTROLLERDEVICEADDED to react to; polling attach state here is the only option.
 SDL_GameController* padFor(int playerIndex) {
     static SDL_GameController* pads[2] = {nullptr, nullptr};
@@ -93,6 +109,8 @@ uint16_t sampleController(SDL_GameController* pad) {
 
 } // namespace
 
+#endif // !_WIN32
+
 // Reads SDL's keyboard-state snapshot without pumping events — SDL_PumpEvents (Cocoa's
 // nextEventMatchingMask under the hood) may only be called from the main thread, but this is
 // called from the dedicated emulation thread in emu_cli.cpp's bare-window path. The main
@@ -105,11 +123,12 @@ uint16_t sampleController(SDL_GameController* pad) {
 // its own event pump) is read instead.
 //
 // Keyboard and pad are OR'd together rather than the pad taking exclusive priority when
-// present: a real-world Windows report showed a wired Xbox pad getting SDL_GameControllerOpen'd
-// successfully (padFor() returning non-null) while its button/axis state never actually read as
-// pressed — with the old early-return-on-pad-present logic that silently locked out the keyboard
-// too, since the branch below never ran. OR'ing means a misbehaving/idle pad can never block the
-// keyboard fallback, at the cost of only mattering if someone's mashing both at once.
+// present: a real-world Windows report (back when this went through SDL_GameController — see
+// the platform fork above for why Windows no longer does) showed a wired Xbox pad opening
+// successfully while its button/axis state never actually read as pressed — with the old
+// early-return-on-pad-present logic that silently locked out the keyboard too, since the branch
+// below never ran. OR'ing means a misbehaving/idle pad can never block the keyboard fallback, at
+// the cost of only mattering if someone's mashing both at once.
 uint16_t sampleJoy1(bool suppress) {
     if (suppress) return 0;
     uint16_t joy = 0;
@@ -145,7 +164,11 @@ uint16_t sampleJoy1(bool suppress) {
 #if defined(__APPLE__) || defined(_WIN32)
     }
 #endif
+#ifdef _WIN32
+    joy |= NativeGamepad::sample(0);
+#else
     if (SDL_GameController* pad = padFor(0)) joy |= sampleController(pad);
+#endif
     return joy;
 }
 
@@ -184,6 +207,10 @@ uint16_t sampleJoy2(bool suppress) {
 #if defined(__APPLE__) || defined(_WIN32)
     }
 #endif
+#ifdef _WIN32
+    joy |= NativeGamepad::sample(1);
+#else
     if (SDL_GameController* pad = padFor(1)) joy |= sampleController(pad);
+#endif
     return joy;
 }
