@@ -67,6 +67,7 @@ echo "Compiling"
   "${SDL2_ROOT}/lib/libSDL2main.a" \
   "${SDL2_ROOT}/lib/libSDL2.dll.a" \
   -lcomdlg32 -lwinmm -luser32 -lgdi32 -lshell32 -ldwmapi -ldsound -ldxguid \
+  -ldinput8 -lwbemuuid -lole32 -loleaut32 -luuid -lxinput \
   -static-libgcc -static-libstdc++ -static -lpthread
 
 echo "Removing previous Game directory"
