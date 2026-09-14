@@ -1,5 +1,13 @@
 #include "display.hpp"
+#include "sdsp.hpp"
+#ifdef _WIN32
+#include <SDL_syswm.h>
+#endif
+#include "wav_writer.hpp"
 #include "../macOS/native_file_dialog.hpp"
+#include "../macOS/native_game_view.hpp"
+#include "../macOS/native_input.hpp"
+#include "../macOS/native_window.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -15,7 +23,7 @@ constexpr int scale23(int v) { return (v * 2 + 1) / 3; }
 constexpr int WINDOW_HEIGHT = scale23(768); // height of the top area (left/right menus + game frame)
 constexpr int BOTTOM_PANEL_HEIGHT = scale23(440);
 constexpr int LEFT_PANEL_WIDTH = scale23(440);
-constexpr int PANEL_WIDTH   = scale23(700);
+constexpr int PANEL_WIDTH   = scale23(900); // widened for the dir table's entry/start/loop text + Play/Save WAV buttons
 
 constexpr int GAME_SCALE  = 2;
 constexpr int GAME_DST_W  = 256 * GAME_SCALE;                    // 512
@@ -117,131 +125,148 @@ void applyModernDarkTheme() {
     c[ImGuiCol_DragDropTarget]       = accent;
 }
 
-// Decorative pillarbox/letterbox fill for fullscreen mode, in place of plain black bars.
-constexpr int CHECKER_CELL_SIZE = 28;
-constexpr SDL_Color CHECKER_DARK{38, 39, 44, 255};
-constexpr SDL_Color CHECKER_LIGHT{56, 58, 65, 255};
-
-void drawCheckerRect(SDL_Renderer* renderer, const SDL_Rect& area) {
-    if (area.w <= 0 || area.h <= 0) return;
-    for (int y = area.y; y < area.y + area.h; y += CHECKER_CELL_SIZE) {
-        for (int x = area.x; x < area.x + area.w; x += CHECKER_CELL_SIZE) {
-            const bool dark = ((x / CHECKER_CELL_SIZE) + (y / CHECKER_CELL_SIZE)) % 2 == 0;
-            const SDL_Color& c = dark ? CHECKER_DARK : CHECKER_LIGHT;
-            SDL_Rect cell{x, y,
-                          std::min(CHECKER_CELL_SIZE, area.x + area.w - x),
-                          std::min(CHECKER_CELL_SIZE, area.y + area.h - y)};
-            SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
-            SDL_RenderFillRect(renderer, &cell);
-        }
-    }
-}
 }
 
 Display::Display(const std::string& title, bool debugUi)
     : m_state(debugUi ? EmulatorState::EmulatorStateDebug : EmulatorState::EmulatorStateNormal) {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
-    }
-
     if (m_state == EmulatorState::EmulatorStateDebug) {
         m_windowWidth = TEXT_PANEL_X + PANEL_WIDTH;
         m_windowHeight = WINDOW_HEIGHT + BOTTOM_PANEL_HEIGHT;
+
+        // Debug UI keeps the original SDL2 + ImGui pipeline (imgui_impl_sdl2/sdlrenderer2 both
+        // fundamentally require an SDL_Window + SDL_Renderer) — see docs/tickets/06 for what
+        // it would take to bring this mode onto the native path bare mode uses below.
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+            throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
+        }
+        m_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                    m_windowWidth, m_windowHeight, SDL_WINDOW_SHOWN);
+        if (!m_window) {
+            SDL_Quit();
+            throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+        }
+        SDL_EventState(SDL_DROPFILE, SDL_ENABLE); // drag-and-drop / Finder "open with" a .sfc
+        m_renderer = SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!m_renderer) {
+            SDL_DestroyWindow(m_window);
+            m_window = nullptr;
+            SDL_Quit();
+            throw std::runtime_error(std::string("SDL_CreateRenderer failed: ") + SDL_GetError());
+        }
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr; // no persisted UI layout needed
+        ImGui::StyleColorsDark();
+        applyModernDarkTheme();
+        ImGui_ImplSDL2_InitForSDLRenderer(m_window, m_renderer);
+        ImGui_ImplSDLRenderer2_Init(m_renderer);
     } else {
         // Bare mode: window is exactly the scaled game frame, nothing else.
         m_windowWidth = GAME_DST_W;
         m_windowHeight = GAME_DST_H;
-    }
 
-    const bool isNormal = m_state == EmulatorState::EmulatorStateNormal;
-    const Uint32 windowFlags = SDL_WINDOW_SHOWN | (isNormal ? SDL_WINDOW_RESIZABLE : 0);
-    m_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                m_windowWidth, m_windowHeight, windowFlags);
-    if (!m_window) {
-        SDL_Quit();
-        throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+#if defined(__APPLE__) || defined(_WIN32)
+        m_nativeWindowHandle = createNativeWindow(title, m_windowWidth, m_windowHeight, true);
+        installNativeWindowDelegate(m_nativeWindowHandle);
+        setNativeMinimumSize(m_nativeWindowHandle, 256, 224); // never shrink below the native SNES framebuffer size
+        m_nativeGameView = attachNativeGameView(m_nativeWindowHandle);
+        installNativeKeyMonitor();
+#endif
     }
-    if (isNormal) {
-        // Never shrink below the native SNES framebuffer size.
-        SDL_SetWindowMinimumSize(m_window, 256, 224);
-    }
-    SDL_EventState(SDL_DROPFILE, SDL_ENABLE); // drag-and-drop / Finder "open with" a .sfc
-    m_renderer = SDL_CreateRenderer(m_window, -1,
-                                    SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!m_renderer) {
-        SDL_DestroyWindow(m_window);
-        m_window = nullptr;
-        SDL_Quit();
-        throw std::runtime_error(std::string("SDL_CreateRenderer failed: ") + SDL_GetError());
-    }
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr; // no persisted UI layout needed
-    ImGui::StyleColorsDark();
-    applyModernDarkTheme();
-    ImGui_ImplSDL2_InitForSDLRenderer(m_window, m_renderer);
-    ImGui_ImplSDLRenderer2_Init(m_renderer);
-
-    // On macOS, dragging a window edge runs Cocoa's own live-resize tracking loop; SDL_PollEvent
-    // (called from processEvents()) doesn't return to the ordinary main loop until the mouse
-    // button is released, so without this the game view freezes mid-drag. SDL_AddEventWatch's
-    // callback, unlike SDL_PollEvent, fires synchronously from inside that nested loop too.
-    SDL_AddEventWatch(&Display::sdlEventWatch, this);
 }
 
 Display::~Display() {
-    SDL_DelEventWatch(&Display::sdlEventWatch, this);
-    ImGui_ImplSDLRenderer2_Shutdown();
-    ImGui_ImplSDL2_Shutdown();
-    ImGui::DestroyContext();
-    if (m_frameTex)      SDL_DestroyTexture(m_frameTex);
-    if (m_tileSheetTex)  SDL_DestroyTexture(m_tileSheetTex);
-    if (m_gsuRamTex)     SDL_DestroyTexture(m_gsuRamTex);
-    if (m_renderer)  SDL_DestroyRenderer(m_renderer);
-    if (m_window)    SDL_DestroyWindow(m_window);
-    SDL_Quit();
+    if (m_previewAudioDevice != 0) SDL_CloseAudioDevice(m_previewAudioDevice);
+    if (m_state == EmulatorState::EmulatorStateDebug) {
+        ImGui_ImplSDLRenderer2_Shutdown();
+        ImGui_ImplSDL2_Shutdown();
+        ImGui::DestroyContext();
+        if (m_frameTex)      SDL_DestroyTexture(m_frameTex);
+        if (m_tileSheetTex)  SDL_DestroyTexture(m_tileSheetTex);
+        if (m_gsuRamTex)     SDL_DestroyTexture(m_gsuRamTex);
+        if (m_renderer)  SDL_DestroyRenderer(m_renderer);
+        if (m_window)    SDL_DestroyWindow(m_window);
+        SDL_Quit();
+    } else {
+#if defined(__APPLE__) || defined(_WIN32)
+        removeNativeKeyMonitor();
+#endif
+    }
 }
 
-int Display::sdlEventWatch(void* userdata, SDL_Event* event) {
-    auto* self = static_cast<Display*>(userdata);
-    if (event->type == SDL_WINDOWEVENT &&
-        (event->window.event == SDL_WINDOWEVENT_RESIZED || event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) &&
-        event->window.windowID == SDL_GetWindowID(self->m_window)) {
-        self->redrawDuringResize();
+void* Display::nativeWindowHandle() const {
+    if (m_nativeWindowHandle) return m_nativeWindowHandle; // bare mode: already an HWND on Windows
+#ifdef _WIN32
+    if (m_window) {
+        SDL_SysWMinfo wmInfo;
+        SDL_VERSION(&wmInfo.version);
+        if (SDL_GetWindowWMInfo(m_window, &wmInfo)) {
+            return static_cast<void*>(wmInfo.info.win.window);
+        }
     }
-    return 0;
+#endif
+    return nullptr;
 }
 
-void Display::redrawDuringResize() {
-    // Only the bare game-only window benefits: the debug UI's panels/toolbar are ImGui widgets
-    // laid out relative to fixed panel constants, not something safe to redraw mid-drag outside
-    // the normal ImGui NewFrame/Render pairing. m_frameTex already holds the last frame this
-    // renderer uploaded (presentWithFrame keeps it alive across calls) — just rescale/re-blit it,
-    // no ImGui or CPU/PPU involvement needed.
-    if (m_state != EmulatorState::EmulatorStateNormal || m_fullscreen || !m_frameTex || !m_hasFrameContent) {
-        return;
+void Display::playBrrPreview(const std::vector<int16_t>& pcm, int sampleRateHz) {
+    if (pcm.empty() || sampleRateHz <= 0) return;
+
+    if (!m_previewAudioSubsystemInit) {
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return;
+        m_previewAudioSubsystemInit = true;
     }
 
-    SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
+    if (m_previewAudioDevice == 0 || m_previewAudioDeviceRate != sampleRateHz) {
+        if (m_previewAudioDevice != 0) {
+            SDL_CloseAudioDevice(m_previewAudioDevice);
+            m_previewAudioDevice = 0;
+        }
+        SDL_AudioSpec want{};
+        want.freq = sampleRateHz;
+        want.format = AUDIO_S16SYS;
+        want.channels = 1;
+        want.samples = 1024;
+        SDL_AudioSpec have{};
+        // allowed_changes=0: SDL guarantees `have` matches `want` exactly, converting
+        // internally if the driver needs a different native format.
+        m_previewAudioDevice = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (m_previewAudioDevice == 0) return;
+        m_previewAudioDeviceRate = sampleRateHz;
+    }
 
-    SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
-    SDL_RenderClear(m_renderer);
-
-    const float scale = std::min(static_cast<float>(m_windowWidth) / 256.0f,
-                                  static_cast<float>(m_windowHeight) / 224.0f);
-    SDL_Rect dst;
-    dst.w = static_cast<int>(256.0f * scale + 0.5f);
-    dst.h = static_cast<int>(224.0f * scale + 0.5f);
-    dst.x = (m_windowWidth - dst.w) / 2;
-    dst.y = (m_windowHeight - dst.h) / 2;
-    SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
-
-    SDL_RenderPresent(m_renderer);
+    SDL_ClearQueuedAudio(m_previewAudioDevice);
+    SDL_QueueAudio(m_previewAudioDevice, pcm.data(), static_cast<uint32_t>(pcm.size() * sizeof(int16_t)));
+    SDL_PauseAudioDevice(m_previewAudioDevice, 0);
 }
 
 bool Display::processEvents(DebugAction& action) {
     action = DebugAction::None;
+
+#if defined(__APPLE__) || defined(_WIN32)
+    if (m_state == EmulatorState::EmulatorStateNormal) {
+        // No SDL video subsystem in bare mode (see the constructor) — pump the native platform's
+        // own event queue instead of SDL_PollEvent. See docs/tickets/02-native-event-loop.md.
+        pumpNativeEvents();
+        if (nativeWindowWantsClose(m_nativeWindowHandle)) return false;
+        if (takeNativeEscapePressed() && m_fullscreen) {
+            // Bare mode: Escape exits fullscreen instead of pausing — there's no
+            // toolbar/pause indicator in the bare window for this to make sense against.
+            m_fullscreen = false;
+            toggleNativeFullscreen(m_nativeWindowHandle);
+        }
+        if (takeNativeF11Pressed()) {
+            m_fullscreen = !m_fullscreen;
+            toggleNativeFullscreen(m_nativeWindowHandle);
+        }
+        if (const auto dropped = takeNativeDroppedRomPath()) {
+            m_pendingRomLoadPath = *dropped;
+            action = DebugAction::LoadRom;
+        }
+        return true;
+    }
+#endif
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
@@ -252,16 +277,7 @@ bool Display::processEvents(DebugAction& action) {
                     action = DebugAction::StepOne;
                     break;
                 case SDLK_ESCAPE:
-                    if (m_state == EmulatorState::EmulatorStateNormal) {
-                        // Normal mode: Escape exits fullscreen instead of pausing — there's no
-                        // toolbar/pause indicator in the bare window for this to make sense against.
-                        if (m_fullscreen) {
-                            m_fullscreen = false;
-                            SDL_SetWindowFullscreen(m_window, 0);
-                        }
-                    } else {
-                        action = DebugAction::TogglePause;
-                    }
+                    action = DebugAction::TogglePause;
                     break;
                 case SDLK_F11:
                     m_fullscreen = !m_fullscreen;
@@ -269,9 +285,6 @@ bool Display::processEvents(DebugAction& action) {
                     break;
             }
         }
-        // Covers both a live drag-and-drop onto the window and macOS's "open with" /
-        // double-click-a-.sfc-in-Finder launch (SDL's Cocoa backend turns the latter into
-        // this same event once SDL_Init has run, queued if it arrives before that).
         if (event.type == SDL_DROPFILE) {
             m_pendingRomLoadPath = event.drop.file;
             SDL_free(event.drop.file);
@@ -501,12 +514,16 @@ void Display::drawRightPanel(const DebugPanel& panel) {
     }
     ImGui::Text("DIR:$%02X (table @ $%04X)   KON:$%02X  ENDX:$%02X",
                 panel.dspDir, static_cast<unsigned>(panel.dspDir) << 8, panel.dspKon, panel.dspEndx);
-    if (ImGui::BeginTable("DspVoices", 7, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Borders)) {
+    if (ImGui::BeginTable("DspVoices", 11, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Borders)) {
         ImGui::TableSetupColumn("Voice");
         ImGui::TableSetupColumn("SRCN");
         ImGui::TableSetupColumn("Load Addr");
+        ImGui::TableSetupColumn("Loop Addr");
         ImGui::TableSetupColumn("ARAM Addr");
         ImGui::TableSetupColumn("Playing");
+        ImGui::TableSetupColumn("Pitch");
+        ImGui::TableSetupColumn("Vol L");
+        ImGui::TableSetupColumn("Vol R");
         ImGui::TableSetupColumn("ENVX");
         ImGui::TableSetupColumn("OUTX");
         ImGui::TableHeadersRow();
@@ -519,19 +536,137 @@ void Display::drawRightPanel(const DebugPanel& panel) {
             ImGui::TableSetColumnIndex(2);
             ImGui::Text("$%04X", panel.dspLoadAddr[v]);
             ImGui::TableSetColumnIndex(3);
+            ImGui::Text("$%04X", panel.dspLoopAddr[v]);
+            ImGui::TableSetColumnIndex(4);
             if (panel.dspActive[v]) {
                 ImGui::TextColored(VALUE_COLOR, "$%04X", panel.dspBrrAddr[v]);
             } else {
                 ImGui::TextDisabled("--");
             }
-            ImGui::TableSetColumnIndex(4);
-            ImGui::TextUnformatted(panel.dspActive[v] ? "yes" : "no");
             ImGui::TableSetColumnIndex(5);
-            ImGui::Text("$%02X", panel.dspEnvx[v]);
+            ImGui::TextUnformatted(panel.dspActive[v] ? "yes" : "no");
             ImGui::TableSetColumnIndex(6);
+            ImGui::Text("$%04X", panel.dspPitch[v]);
+            ImGui::TableSetColumnIndex(7);
+            ImGui::Text("%d", panel.dspVoll[v]);
+            ImGui::TableSetColumnIndex(8);
+            ImGui::Text("%d", panel.dspVolr[v]);
+            ImGui::TableSetColumnIndex(9);
+            ImGui::Text("$%02X", panel.dspEnvx[v]);
+            ImGui::TableSetColumnIndex(10);
             ImGui::Text("$%02X", panel.dspOutx[v]);
         }
         ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText("Sample Directory (DIR table)");
+    // Hardware has no length field for this table — every SRCN 0-255 is a valid read, most
+    // just never get referenced by the game. Unlike the voice table above (only the 8 live
+    // voices), this walks the whole 256-entry table directly from ARAM so a sample can be
+    // located/checked even while nothing is currently playing it.
+    constexpr float kDirTableChildHeight = 200.0f;
+    ImGui::BeginChild("DirTableScroll", ImVec2(0.0f, kDirTableChildHeight), false);
+    ImGuiListClipper dirClipper;
+    dirClipper.Begin(256);
+    while (dirClipper.Step()) {
+        for (int srcn = dirClipper.DisplayStart; srcn < dirClipper.DisplayEnd; ++srcn) {
+            // Wrapped to 16 bits like real hardware — DIR=$FF combined with a high SRCN
+            // would otherwise index panel.apuRam past its 64 KiB bound (undefined behavior).
+            const uint16_t entry = static_cast<uint16_t>((static_cast<uint32_t>(panel.dspDir) << 8) + static_cast<uint32_t>(srcn) * 4);
+            const uint16_t startAddr = static_cast<uint16_t>(panel.apuRam[entry] | (panel.apuRam[static_cast<uint16_t>(entry + 1)] << 8));
+            const uint16_t loopAddr = static_cast<uint16_t>(panel.apuRam[static_cast<uint16_t>(entry + 2)] | (panel.apuRam[static_cast<uint16_t>(entry + 3)] << 8));
+
+            // For each active voice currently playing this SRCN, its *live* ARAM address —
+            // the block actually being decoded right now, which drifts away from `startAddr`
+            // as playback advances (and can differ between voices sharing the same SRCN if
+            // they triggered at different times / are at different points in the sample).
+            char voiceTag[96] = "";
+            int voiceTagPos = 0;
+            bool rowHasVoice = false;
+            for (int v = 0; v < 8; ++v) {
+                if (panel.dspActive[v] && panel.dspSrcn[v] == srcn) {
+                    rowHasVoice = true;
+                    voiceTagPos += std::snprintf(voiceTag + voiceTagPos, sizeof(voiceTag) - static_cast<size_t>(voiceTagPos),
+                                                  "%sV%d=$%04X", voiceTagPos > 0 ? "," : " <- ", v, panel.dspBrrAddr[v]);
+                }
+            }
+
+            char line[64];
+            std::snprintf(line, sizeof(line), "SRCN $%02X: start=$%04X loop=$%04X", srcn, startAddr, loopAddr);
+            if (rowHasVoice) {
+                ImGui::TextColored(VALUE_COLOR, "%s%s", line, voiceTag);
+            } else {
+                ImGui::TextUnformatted(line);
+            }
+
+            // First active voice currently playing this SRCN's real pitch, if any — that's
+            // what it's actually being heard at right now — else `fallback`.
+            const auto activeVoicePitch = [&](uint16_t fallback) {
+                for (int v = 0; v < 8; ++v) {
+                    if (panel.dspActive[v] && panel.dspSrcn[v] == srcn) return panel.dspPitch[v];
+                }
+                return fallback;
+            };
+
+            ImGui::SameLine();
+            ImGui::PushID(srcn);
+            const bool playClicked = ImGui::SmallButton("Play");
+            ImGui::SameLine();
+            const bool saveClicked = ImGui::SmallButton("Save WAV");
+            ImGui::PopID();
+
+            if (playClicked) {
+                // No text-entry step for Play — fall back to native rate rather than Save's
+                // deliberate $0 default, since a one-shot preview should actually be audible.
+                const uint16_t pitch = activeVoicePitch(0x1000);
+                const std::vector<int16_t> pcm = decodeBrrSampleForExport(panel.apuRam, startAddr);
+                const int sampleRate = static_cast<int>(kBrrSampleRateHz * static_cast<double>(pitch) / 4096.0 + 0.5);
+                playBrrPreview(pcm, sampleRate);
+            }
+            if (saveClicked) {
+                m_pitchPromptSrcn = srcn;
+                m_pitchPromptStartAddr = startAddr;
+                std::snprintf(m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer), "%04X", activeVoicePitch(0));
+                m_pitchPromptOpenRequested = true;
+            }
+        }
+    }
+    dirClipper.End();
+    ImGui::EndChild();
+
+    // Deferred from the button click above: OpenPopup must run at the same ID-stack level as
+    // BeginPopupModal below (outside DirTableScroll), not from inside the child the row lives in.
+    if (m_pitchPromptOpenRequested) {
+        ImGui::OpenPopup("Sample Pitch");
+        m_pitchPromptOpenRequested = false;
+    }
+    if (ImGui::BeginPopupModal("Sample Pitch", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("SRCN $%02X", m_pitchPromptSrcn);
+        ImGui::TextUnformatted("Pitch (hex, VxPITCH 14-bit; $1000 = native 32kHz rate):");
+        ImGui::InputText("##Pitch", m_pitchPromptBuffer, sizeof(m_pitchPromptBuffer),
+                          ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase);
+
+        unsigned pitchValue = 0;
+        std::sscanf(m_pitchPromptBuffer, "%x", &pitchValue);
+        if (pitchValue == 0) pitchValue = 1;
+        const int sampleRate = static_cast<int>(kBrrSampleRateHz * pitchValue / 4096.0 + 0.5);
+        ImGui::Text("-> %d Hz sample rate", sampleRate);
+
+        if (ImGui::Button("Save WAV...")) {
+            char suggestedName[32];
+            std::snprintf(suggestedName, sizeof(suggestedName), "srcn_%02X.wav", m_pitchPromptSrcn);
+            const std::optional<std::string> path = showSaveSampleDialog(suggestedName);
+            if (path) {
+                const std::vector<int16_t> pcm = decodeBrrSampleForExport(panel.apuRam, m_pitchPromptStartAddr);
+                writeWavFile(*path, pcm, sampleRate);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     ImGui::SeparatorText("APU RAM (ARAM)");
@@ -843,12 +978,20 @@ void Display::drawGsuDebugPanel(const DebugPanel& panel) {
     ImGui::End();
 }
 
+void Display::presentNativeFrame(const uint32_t* pixels) {
+    if (!m_nativeGameView) return;
+    presentNativeGameFrame(m_nativeGameView, pixels);
+}
+
 PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& panel) {
-    // Bare/fullscreen windows are resizable (or change size via SDL_SetWindowFullscreen) —
-    // re-read the live size every frame rather than trusting the constructor's snapshot, so the
-    // framebuffer stretch below tracks the actual window.
-    if (m_state == EmulatorState::EmulatorStateNormal || m_fullscreen) {
+    // This function is debug-mode only now (bare mode renders through presentNativeFrame() —
+    // see docs/tickets/05-wire-up-and-cleanup.md), so m_state is always EmulatorStateDebug here.
+    // Fullscreen (F11) is still a debug-mode feature though (see processEvents()) — a debug
+    // session gone fullscreen re-reads the live window size every frame rather than trusting the
+    // constructor's snapshot, so the framebuffer stretch below tracks the actual window.
+    if (m_fullscreen) {
         SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
+        SDL_RenderSetLogicalSize(m_renderer, m_windowWidth, m_windowHeight);
     }
 
     // Create streaming texture once
@@ -871,9 +1014,7 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
     if (m_frameTex && pixels) {
         SDL_UpdateTexture(m_frameTex, nullptr, pixels, 256 * static_cast<int>(sizeof(uint32_t)));
         m_hasFrameContent = true;
-        SDL_Rect dst = (m_state == EmulatorState::EmulatorStateDebug)
-            ? SDL_Rect{GAME_DST_X, std::max(0, (WINDOW_HEIGHT - GAME_DST_H) / 2), GAME_DST_W, GAME_DST_H}
-            : SDL_Rect{0, 0, m_windowWidth, m_windowHeight};
+        SDL_Rect dst{GAME_DST_X, std::max(0, (WINDOW_HEIGHT - GAME_DST_H) / 2), GAME_DST_W, GAME_DST_H};
         if (m_fullscreen) {
             // Fullscreen: always fill the full screen height (fractional scale, not snapped to
             // an integer multiple) so there's no letterboxing above/below — only pillarbox bars
@@ -883,30 +1024,8 @@ PaletteEdit Display::presentWithFrame(const uint32_t* pixels, const DebugPanel& 
             dst.w = static_cast<int>(256.0f * scale + 0.5f);
             dst.x = (m_windowWidth - dst.w) / 2;
             dst.y = 0;
-        } else if (m_state == EmulatorState::EmulatorStateNormal) {
-            // Bare resizable window can be any size/aspect ratio — scale by the largest fractional
-            // factor that fits both dimensions (never distorting the 8:7 framebuffer) so the game
-            // always fills either the full width or full height, and letterbox/pillarbox only the
-            // unavoidable leftover with the black already cleared above.
-            const float scale = std::min(static_cast<float>(m_windowWidth) / 256.0f,
-                                          static_cast<float>(m_windowHeight) / 224.0f);
-            dst.w = static_cast<int>(256.0f * scale + 0.5f);
-            dst.h = static_cast<int>(224.0f * scale + 0.5f);
-            dst.x = (m_windowWidth - dst.w) / 2;
-            dst.y = (m_windowHeight - dst.h) / 2;
         }
         SDL_RenderCopy(m_renderer, m_frameTex, nullptr, &dst);
-
-        if (m_fullscreen && m_state == EmulatorState::EmulatorStateNormal) {
-            // Decorative checker bars fill whatever pillarbox/letterbox space is left over
-            // around the integer-scaled frame, instead of leaving it plain black. Only shown
-            // for the non-debug (--debug-less) window — a debug session gone fullscreen keeps
-            // plain black bars since the checker pattern is meant as play-mode decoration.
-            drawCheckerRect(m_renderer, SDL_Rect{0, 0, dst.x, m_windowHeight});
-            drawCheckerRect(m_renderer, SDL_Rect{dst.x + dst.w, 0, m_windowWidth - (dst.x + dst.w), m_windowHeight});
-            drawCheckerRect(m_renderer, SDL_Rect{0, 0, m_windowWidth, dst.y});
-            drawCheckerRect(m_renderer, SDL_Rect{0, dst.y + dst.h, m_windowWidth, m_windowHeight - (dst.y + dst.h)});
-        }
     }
 
     if (m_state == EmulatorState::EmulatorStateDebug && !m_fullscreen) {

@@ -9,12 +9,12 @@ static const uint8_t kUnitOffsets[8][4] = {
     {0, 0, 0, 0}, // mode 2: 2 bytes → B+0, B+0
     {0, 0, 1, 1}, // mode 3: 4 bytes → B+0, B+0, B+1, B+1
     {0, 1, 2, 3}, // mode 4: 4 bytes → B+0..B+3
-    {0, 1, 0, 1}, // mode 5: same as 1 (fixed address variant)
+    {0, 1, 0, 1}, // mode 5: 4 bytes → B+0, B+1, B+0, B+1 (2 registers, each written twice)
     {0, 0, 0, 0}, // mode 6: same as 2
     {0, 0, 1, 1}, // mode 7: same as 3
 };
 
-static const uint8_t kUnitSize[8] = { 1, 2, 2, 4, 4, 2, 2, 4 };
+static const uint8_t kUnitSize[8] = { 1, 2, 2, 4, 4, 4, 2, 4 };
 
 uint32_t Dma::trigger(uint8_t enableMask, Bus& bus) {
     if (enableMask == 0) return 0;

@@ -2058,9 +2058,9 @@ uint32_t Spc700::step(APU& apu) {
             const int8_t rel = static_cast<int8_t>(fetchPc(apu));
             if (m_y != 0) {
                 m_pc = spcPcPlusRel(m_pc, rel);
-                return 4;
+                return 6;
             }
-            return 2;
+            return 4;
         }
 
         case 0xFF: { // STOP — normally driver exit; halt so we avoid burning host CPU.

@@ -65,6 +65,7 @@ Bus::~Bus() {
 void Bus::reset() {
     m_wram.fill(0);
     m_wramAddr = 0;
+    m_openBus = 0;
     m_apu.reset();
     m_ppu.reset();
     m_dma.reset();
@@ -72,6 +73,8 @@ void Bus::reset() {
     m_gsuIrqPending = false;
     m_reg420c = 0;
     m_vblankWaiPending = false;
+    m_vblankLatchPending = false;
+    m_frameReadyPending = false;
     m_vCounter   = 261;
     m_hCounter   = 0;
     m_cycleAccum = 0;
@@ -148,6 +151,9 @@ bool Bus::stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles) {
         // of that line (written when we entered oldV). If we ran HDMA for m_vCounter before this,
         // we would overwrite scroll with the next line's values and only one raster band would move.
         if (oldV < VBLANK_START) {
+#ifdef SNESFOX_DEBUG_HOFS_TRACE
+            fprintf(stderr, "HOFSTRACE line=%d bg1hofs=%u\n", static_cast<int>(oldV), m_ppu.bgHOFS(0));
+#endif
             m_ppu.renderScanline(static_cast<int>(oldV));
         }
 
@@ -174,8 +180,10 @@ bool Bus::stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles) {
             m_nmiFlag = true;
             m_vblankWaiPending = true;
             m_vblankLatchPending = true;
+            m_frameReadyPending = true;
             if (m_nmiEnabled) {
                 nmiReturn = true;
+                m_nmiPendingDispatch = true;
             }
         }
     }
@@ -210,6 +218,30 @@ bool Bus::stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles) {
 
     if (!m_apuPaused) m_apu.step(delta);
     return false;
+}
+
+void Bus::prelatchNmiIfPending(uint64_t projectedTotalCycles) {
+    if (m_nmiFlag || !m_nmiEnabled) return;
+    if (projectedTotalCycles <= m_lastCycles) return;
+
+    // Read-only replay of stepPeripherals's scanline-crossing loop, using a local scanline
+    // counter seeded from the real m_vCounter — deliberately does not touch m_vCounter,
+    // m_cycleAccum, rendering, or HDMA, all of which still only advance once, later, via the
+    // real stepPeripherals() call. This only decides whether *this* projected cost would cross
+    // into VBlank, so the flag/pending-dispatch signal can become visible before that happens.
+    uint64_t cycleAccum = m_cycleAccum + (projectedTotalCycles - m_lastCycles);
+    uint16_t v = m_vCounter;
+    while (cycleAccum >= Bus::kCyclesPerScanline) {
+        cycleAccum -= Bus::kCyclesPerScanline;
+        const uint16_t oldV = v;
+        ++v;
+        if (v >= V_TOTAL) v = 0;
+        if (oldV < VBLANK_START && v >= VBLANK_START) {
+            m_nmiFlag = true;
+            m_nmiPendingDispatch = true;
+            return;
+        }
+    }
 }
 
 void Bus::syncWaiAfterVblankEdge(CPU& cpu) {
@@ -278,6 +310,12 @@ unsigned Bus::accessSpeedCycles(uint8_t bank, uint16_t addr) const {
 }
 
 uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
+    const uint8_t value = readMapped(bank, addr);
+    m_openBus = value;
+    return value;
+}
+
+uint8_t Bus::readMapped(uint8_t bank, uint16_t addr) const {
     // ------------------------------------------------------------
     // WRAM full banks
     // ------------------------------------------------------------
@@ -306,6 +344,22 @@ uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
         if (((bank <= 0x3F) || (bank >= 0x80 && bank <= 0xBF)) && addr >= 0x3000 && addr <= 0x34FF) {
             return m_gsu.readRegister(addr);
         }
+    }
+
+    // ------------------------------------------------------------
+    // ROM fast path: every special register/port checked below (PPU/APU/WRAM
+    // ports, H/V latches, NMI/IRQ flags, joypad, DMA regs, mul/div, SRAM) lives
+    // below $8000 — an access at $8000 or above can only ever resolve to ROM,
+    // so skip the whole MMIO/SRAM decode chain and go straight there. This is
+    // the single hottest path in the emulator: every ROM opcode/operand fetch
+    // and every DMA/HDMA byte read from ROM lands here.
+    if (addr >= 0x8000) {
+        if (m_mapMode == RomMapping::HiROM) {
+            const uint32_t offset = hiRomToFileOffset(bank, addr); // isHiRomArea() is always true up here
+            return offset < m_rom.size() ? m_rom[offset] : 0xFF;
+        }
+        const uint32_t offset = loRomToFileOffset(bank, addr); // isLoRomArea() is always true up here
+        return offset < m_rom.size() ? m_rom[offset] : 0xFF;
     }
 
     // ------------------------------------------------------------
@@ -426,10 +480,16 @@ uint8_t Bus::read(uint8_t bank, uint16_t addr) const {
         }
     }
 
-    return 0x00;
+    // Unmapped region — real hardware has no pull-down here, it returns whatever byte was last
+    // driven onto the data bus by the previous transfer. See m_openBus's doc comment.
+    return m_openBus;
 }
 
 void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
+    // Every write drives its byte onto the data bus regardless of whether anything is mapped
+    // there to receive it — see m_openBus's doc comment.
+    m_openBus = value;
+
     // ------------------------------------------------------------
     // WRAM full banks
     // ------------------------------------------------------------
@@ -464,6 +524,12 @@ void Bus::write(uint8_t bank, uint16_t addr, uint8_t value) {
             return;
         }
     }
+
+    // ROM fast path (see the matching comment in read() above): every special
+    // register/port checked below lives under $8000, and SRAM writes require
+    // addr < $8000 too, so $8000+ is always a no-op ROM write — skip straight
+    // past the whole MMIO/SRAM decode chain instead of falling through it.
+    if (addr >= 0x8000) return;
 
     // ------------------------------------------------------------
     // PPU registers ($2100-$213F)

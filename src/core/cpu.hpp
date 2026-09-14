@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include "opcodes.hpp"
 class Bus;
 class CPU final {
 public:
@@ -18,8 +19,13 @@ public:
     uint16_t pc() const;
     uint32_t pc24() const;
     uint8_t opcode() const;
-    const std::string& instruction() const;
-    const std::string& bytes() const;
+    // Built on demand from the raw bytes/addressing-mode step() stashes below, rather than
+    // formatted eagerly inside step() itself — these disassembly strings are only ever
+    // actually read a handful of times per frame (debug UI, --log-cpu trace, single-step),
+    // so doing the formatting (heap-allocating ostringstream calls) on every single
+    // instruction executed was pure waste on the hottest path in the emulator.
+    std::string instruction() const;
+    std::string bytes() const;
     uint8_t p() const;
     bool flagM() const;
     bool flagX() const;
@@ -50,6 +56,17 @@ private:
     uint16_t m_d = 0x0000;
     uint64_t m_cycles = 0;
     uint64_t m_fineCycles = 0;
-    std::string m_instruction = "???";
-    std::string m_bytes;
+
+    // Raw decode info from the last step(), used to lazily format instruction()/bytes().
+    enum class DecodeKind : uint8_t { Reset, Invalid, Normal };
+    DecodeKind m_decodeKind = DecodeKind::Reset;
+    uint8_t m_decodeB0 = 0;
+    uint8_t m_decodeB1 = 0;
+    uint8_t m_decodeB2 = 0;
+    uint8_t m_decodeB3 = 0;
+    uint8_t m_decodeSize = 1;
+    AddrMode m_decodeMode = AddrMode::Implied;
+    const char* m_decodeOpName = "";
+    uint16_t m_decodePc = 0;
+    uint8_t m_decodeP = 0;
 };

@@ -24,12 +24,86 @@ static bool isAscii(const std::string& s) {
     return true;
 }
 
+// Old licensee code -> company name (ported from Snes9x's table).
+static const char* const kLicenseCompanies[256] = {
+    /*00*/ "Invalid", "Nintendo", "Ajinomoto", "Imagineer-Zoom",
+    "Chris Gray Enterprises Inc.", "Zamuse", "Falcom", "Unknown",
+    /*08*/ "Capcom", "HOT-B", "Jaleco", "Coconuts",
+    "Rage Software", "Micronet", "Technos", "Mebio Software",
+    /*10*/ "SHOUEi System", "Starfish", "Gremlin Graphics", "Electronic Arts",
+    "NCS / Masaya", "COBRA Team", "Human/Field", "KOEI",
+    /*18*/ "Hudson Soft", "Game Village", "Yanoman", "Unknown",
+    "Tecmo", "Unknown", "Open System", "Virgin Games",
+    /*20*/ "KSS", "Sunsoft", "POW", "Micro World",
+    "Unknown", "Unknown", "Enix", "Loriciel/Electro Brain",
+    /*28*/ "Kemco", "Seta Co.,Ltd.", "Culture Brain", "Irem Japan",
+    "Pal Soft", "Visit Co.,Ltd.", "INTEC Inc.", "System Sacom Corp.",
+    /*30*/ "Viacom New Media", "Carrozzeria", "Dynamic", "Nintendo",
+    "Magifact", "Hect", "Unknown", "Unknown",
+    /*38*/ "Capcom Europe", "Accolade Europe", "Unknown", "Arcade Zone",
+    "Empire Software", "Loriciel", "Gremlin Graphics", "Unknown",
+    /*40*/ "Seika Corp.", "UBI Soft", "Unknown", "Unknown",
+    "LifeFitness Exertainment", "Unknown", "System 3", "Spectrum Holobyte",
+    /*48*/ "Unknown", "Irem", "Unknown", "Raya Systems/Sculptured Software",
+    "Renovation Products", "Malibu Games/Black Pearl", "Unknown", "U.S. Gold",
+    /*50*/ "Absolute Entertainment", "Acclaim", "Activision", "American Sammy",
+    "GameTek", "Hi Tech Expressions", "LJN Toys", "Unknown",
+    /*58*/ "Unknown", "Unknown", "Mindscape", "Romstar, Inc.",
+    "Unknown", "Tradewest", "Unknown", "American Softworks Corp.",
+    /*60*/ "Titus", "Virgin Interactive Entertainment", "Maxis", "Origin/FCI/Pony Canyon",
+    "Unknown", "Unknown", "Unknown", "Ocean",
+    /*68*/ "Unknown", "Electronic Arts", "Unknown", "Laser Beam",
+    "Unknown", "Unknown", "Elite", "Electro Brain",
+    /*70*/ "Infogrames", "Interplay", "LucasArts", "Parker Brothers",
+    "Konami", "STORM", "Unknown", "Unknown",
+    /*78*/ "THQ Software", "Accolade Inc.", "Triffix Entertainment", "Unknown",
+    "Microprose", "Unknown", "Unknown", "Kemco",
+    /*80*/ "Misawa", "Teichio", "Namco Ltd.", "Lozc",
+    "Koei", "Unknown", "Tokuma Shoten Intermedia", "Tsukuda Original",
+    /*88*/ "DATAM-Polystar", "Unknown", "Unknown", "Bullet-Proof Software",
+    "Vic Tokai", "Unknown", "Character Soft", "I''Max",
+    /*90*/ "Takara", "CHUN Soft", "Video System Co., Ltd.", "BEC",
+    "Unknown", "Varie", "Yonezawa / S'Pal Corp.", "Kaneco",
+    /*98*/ "Unknown", "Pack in Video", "Nichibutsu", "TECMO",
+    "Imagineer Co.", "Unknown", "Unknown", "Unknown",
+    /*a0*/ "Telenet", "Hori", "Unknown", "Unknown",
+    "Konami", "K.Amusement Leasing Co.", "Unknown", "Takara",
+    /*a8*/ "Unknown", "Technos Jap.", "JVC", "Unknown",
+    "Toei Animation", "Toho", "Unknown", "Namco Ltd.",
+    /*b0*/ "Media Rings Corp.", "ASCII Co. Activison", "Bandai", "Unknown",
+    "Enix America", "Unknown", "Halken", "Unknown",
+    /*b8*/ "Unknown", "Unknown", "Culture Brain", "Sunsoft",
+    "Toshiba EMI", "Sony Imagesoft", "Unknown", "Sammy",
+    /*c0*/ "Taito", "Unknown", "Kemco", "Square",
+    "Tokuma Soft", "Data East", "Tonkin House", "Unknown",
+    /*c8*/ "KOEI", "Unknown", "Konami USA", "NTVIC",
+    "Unknown", "Meldac", "Pony Canyon", "Sotsu Agency/Sunrise",
+    /*d0*/ "Disco/Taito", "Sofel", "Quest Corp.", "Sigma",
+    "Ask Kodansha Co., Ltd.", "Unknown", "Naxat", "Unknown",
+    /*d8*/ "Capcom Co., Ltd.", "Banpresto", "Tomy", "Acclaim",
+    "Unknown", "NCS", "Human Entertainment", "Altron",
+    /*e0*/ "Jaleco", "Unknown", "Yutaka", "Unknown",
+    "T&ESoft", "EPOCH Co.,Ltd.", "Unknown", "Athena",
+    /*e8*/ "Asmik", "Natsume", "King Records", "Atlus",
+    "Sony Music Entertainment", "Unknown", "IGS", "Unknown",
+    /*f0*/ "Unknown", "Motown Software", "Left Field Entertainment", "Beam Software",
+    "Tec Magik", "Unknown", "Unknown", "Unknown",
+    /*f8*/ "Unknown", "Cybersoft", "Unknown", "Psygnosis",
+    "Unknown", "Unknown", "Davidson", "Unknown",
+};
+
 static int scoreHeader(const SnesHeader& h) {
     int score = 0;
 
+    // Checksum + complement summing to 0xFFFF is the authoritative signal;
+    // weight it heavily so it decides ties against weaker heuristics below.
+    if (h.validHeader) score += 10;
+
     if (isAscii(h.title)) score += 2;
 
-    if (h.mapMode == 0x20 || h.mapMode == 0x21) score += 2;
+    uint8_t base = h.mapMode & 0x3F;
+    if (base == 0x20 || base == 0x21 || base == 0x23 || base == 0x25 ||
+        base == 0x30 || base == 0x31 || base == 0x32 || base == 0x35) score += 2;
 
     if (h.romType != RomTypeField::UNKNOWN) score += 1;
     if (h.romSize != RomSize::UNKNOWN) score += 1;
@@ -51,7 +125,7 @@ SnesHeader HeaderParser::parse(const std::vector<uint8_t>& data, size_t offset) 
     h.romSize = static_cast<RomSize>(data[offset + 0x17]);
     h.sramSize = static_cast<SramSize>(data[offset + 0x18]);
     h.country = static_cast<Country>(data[offset + 0x19]);
-    h.license = static_cast<License>(data[offset + 0x1A]);
+    h.license = data[offset + 0x1A];
     h.version = data[offset + 0x1B];
     h.checksum = data[offset + 0x1E] | (data[offset + 0x1F] << 8);
     h.complement = data[offset + 0x1C] | (data[offset + 0x1D] << 8);
@@ -151,18 +225,12 @@ std::string HeaderParser::toString(Country country) {
     }
 }
 
-std::string HeaderParser::toString(License v) {
-    switch (v) {
-        case License::NINTENDO: return "Nintendo";
-        case License::CAPCOM: return "Capcom";
-        case License::KONAMI: return "Konami";
-        case License::GGSDF: return "GGS and Digital Fox";
-        default: return "Unknown";
-    }
+std::string HeaderParser::toString(uint8_t licenseCode) {
+    return kLicenseCompanies[licenseCode];
 }
 
 std::string HeaderParser::mapModeToString(uint8_t value) {
-    uint8_t base = value & 0x2F;
+    uint8_t base = value & 0x3F;
 
     switch (base) {
         case 0x20: return "LoROM + SlowROM";
@@ -177,10 +245,10 @@ std::string HeaderParser::mapModeToString(uint8_t value) {
     }
 }
 
-std::string HeaderParser::toHexValue(License v) {
+std::string HeaderParser::toHexValue(uint8_t licenseCode) {
     std::stringstream ss;
     ss << "0x" << std::hex << std::uppercase
-       << static_cast<int>(v);
+       << static_cast<int>(licenseCode);
     return ss.str();
 }
 

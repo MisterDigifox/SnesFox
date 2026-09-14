@@ -3,6 +3,7 @@
 // platform-agnostic, only the .mm/.cpp implementation differs per platform).
 #include "../macOS/native_file_dialog.hpp"
 
+#include <cstdio>
 #include <windows.h>
 #include <commdlg.h>
 
@@ -27,3 +28,21 @@ std::optional<std::string> showOpenRomDialog() {
 void installOpenRomMenu() {}
 void removeDefaultWindowMenu() {}
 std::optional<std::string> takeMenuOpenRomPath() { return std::nullopt; }
+
+std::optional<std::string> showSaveSampleDialog(const std::string& suggestedName) {
+    char path[MAX_PATH] = {0};
+    std::snprintf(path, sizeof(path), "%s", suggestedName.c_str());
+
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "WAV Audio (*.wav)\0*.wav\0\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = sizeof(path);
+    ofn.lpstrDefExt = "wav";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+
+    if (GetSaveFileNameA(&ofn)) {
+        return std::string(path);
+    }
+    return std::nullopt;
+}

@@ -97,6 +97,30 @@ std::optional<std::string> takeMenuOpenRomPath() {
     return result;
 }
 
+std::optional<std::string> showSaveSampleDialog(const std::string& suggestedName) {
+    @autoreleasepool {
+        NSSavePanel* panel = [NSSavePanel savePanel];
+        [panel setNameFieldStringValue:[NSString stringWithUTF8String:suggestedName.c_str()]];
+        if (@available(macOS 12.0, *)) {
+            UTType* type = [UTType typeWithFilenameExtension:@"wav"];
+            if (type) [panel setAllowedContentTypes:@[type]];
+        } else {
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [panel setAllowedFileTypes:@[@"wav"]];
+            #pragma clang diagnostic pop
+        }
+
+        if ([panel runModal] == NSModalResponseOK) {
+            NSURL* url = [panel URL];
+            if (url && url.path) {
+                return std::string(url.path.UTF8String);
+            }
+        }
+        return std::nullopt;
+    }
+}
+
 #else
 
 std::optional<std::string> showOpenRomDialog() {
@@ -108,6 +132,10 @@ void installOpenRomMenu() {}
 void removeDefaultWindowMenu() {}
 
 std::optional<std::string> takeMenuOpenRomPath() {
+    return std::nullopt;
+}
+
+std::optional<std::string> showSaveSampleDialog(const std::string&) {
     return std::nullopt;
 }
 

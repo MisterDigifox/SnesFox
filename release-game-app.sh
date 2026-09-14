@@ -1,11 +1,18 @@
 #!/bin/bash
 set -e
 
-APP_NAME="Transparency"
+if [ -z "$1" ]; then
+  echo "Erreur: ROM_SRC requis en paramètre." >&2
+  echo "Usage: $0 <ROM_SRC>" >&2
+  exit 1
+fi
+
+ROM_SRC="$1"
+APP_NAME="$(basename "$ROM_SRC" .sfc)"
 APP_DIR="${APP_NAME}.app"
 BUNDLE_ID="org.$APP_NAME.emulator"
 
-./release-game-binary.sh
+./release-game-binary.sh $ROM_SRC
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"

@@ -72,15 +72,6 @@ enum class Country : uint8_t {
     UNKNOWN        = 0xFF
 };
 
-// 🏢 License
-enum class License : uint8_t {
-    NINTENDO = 0x01,
-    CAPCOM   = 0x08,
-    KONAMI   = 0xA4,
-    GGSDF    = 0xFE,
-    UNKNOWN  = 0xFF
-};
-
 // 📄 Header
 struct SnesHeader {
     std::string title;
@@ -89,7 +80,10 @@ struct SnesHeader {
     RomSize romSize;
     SramSize sramSize;
     Country country;
-    License license;
+
+    // Old licensee code (raw byte, offset 0x1A) — looked up in the
+    // Snes9x-derived company table, which covers the full 0x00-0xFF range.
+    uint8_t license;
     uint8_t version;
     uint16_t checksum;
     uint16_t complement;
@@ -119,8 +113,8 @@ public:
     static std::string toString(RomSize v);
     static std::string toString(SramSize v);
     static std::string toString(Country v);
-    static std::string toString(License v);
-    static std::string toHexValue(License v);
+    static std::string toString(uint8_t licenseCode);
+    static std::string toHexValue(uint8_t licenseCode);
     static std::string mapModeToString(uint8_t value);
     static void print(const std::vector<uint8_t>& data);
     static std::vector<std::string> toLines(const std::vector<uint8_t>& data);

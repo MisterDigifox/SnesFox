@@ -1,8 +1,14 @@
 #!/bin/bash
 set -e
 
-ROM_NAME="Transparency"
-ROM_SRC="roms/$ROM_NAME.sfc"
+if [ -z "$1" ]; then
+  echo "Erreur: ROM_SRC requis en paramètre." >&2
+  echo "Usage: $0 <ROM_SRC>" >&2
+  exit 1
+fi
+
+ROM_SRC="$1"
+ROM_NAME="$(basename "$ROM_SRC" .sfc)"
 GEN_HEADER="src/game/embedded_rom.generated.hpp"
 
 xxd -i "$ROM_SRC" \
@@ -21,7 +27,8 @@ clang++ -std=c++20 -O2 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\""
   -L/opt/homebrew/opt/sdl2/lib \
   -lSDL2 \
   -framework Cocoa \
-  -framework UniformTypeIdentifiers
+  -framework UniformTypeIdentifiers \
+  -framework CoreVideo
 
 # macOS: ad-hoc codesign avoids some machines killing unsigned local binaries (symptom: zsh: killed).
 if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then

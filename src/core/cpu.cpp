@@ -683,8 +683,7 @@ void CPU::reset(const Bus& bus, uint16_t resetVector) {
     m_waiting = false;
     m_stopped = false;
 
-    m_instruction = "RESET";
-    m_bytes.clear();
+    m_decodeKind = DecodeKind::Reset;
 }
 
 void CPU::triggerNmi(Bus& bus) {
@@ -725,6 +724,39 @@ void CPU::triggerIrq(Bus& bus) {
     m_fineCycles += 7 * 8;
 }
 
+// Mirrors the extraCycle logic near the end of CPU::step (search "LDX/LDY/STX/STY/CPX/CPY size
+// their memory access off the X flag") — duplicated here, in miniature, only so that early
+// prelatch peek below can predict an instruction's upcoming *cycle-count* cost (needed to know
+// whether it's about to cross into VBlank) without having to move or restructure that later,
+// more elaborate fineCycles-pricing logic, which stays exactly where and how it already was.
+static unsigned operandExtraCycle(const CpuOpcode& op, uint8_t opcode, uint8_t p) {
+    switch (op.mode) {
+        case AddrMode::Absolute:
+        case AddrMode::AbsoluteX:
+        case AddrMode::AbsoluteY:
+        case AddrMode::DirectPage:
+        case AddrMode::DirectPageX:
+        case AddrMode::DirectPageY:
+            break;
+        default:
+            return 0;
+    }
+    bool useIndexWidth = false;
+    switch (opcode) {
+        case 0xA6: case 0xAE: case 0xB6: case 0xBE: // LDX dp/abs/dp,Y/abs,Y
+        case 0xA4: case 0xAC: case 0xB4: case 0xBC: // LDY dp/abs/dp,X/abs,X
+        case 0x86: case 0x8E: case 0x96:            // STX dp/abs/dp,Y
+        case 0x84: case 0x8C: case 0x94:            // STY dp/abs/dp,X
+        case 0xE4: case 0xEC:                       // CPX dp/abs
+        case 0xC4: case 0xCC:                       // CPY dp/abs
+            useIndexWidth = true;
+            break;
+        default:
+            break;
+    }
+    return flagSet(p, useIndexWidth ? FLAG_X : FLAG_M) ? 0 : 1;
+}
+
 void CPU::step(Bus& bus) {
     if (m_stopped) {
         return;
@@ -749,8 +781,8 @@ void CPU::step(Bus& bus) {
     const CpuOpcode& op = cpuOpcodesTable[m_opcode];
 
     if (!op.valid) {
-        m_bytes = raw8(b0);
-        m_instruction = "DB " + hex8(m_opcode);
+        m_decodeKind = DecodeKind::Invalid;
+        m_decodeB0 = b0;
         m_pc = static_cast<uint16_t>(m_pc + 1);
         m_cycles += 1;
         m_fineCycles += 1 * 8;
@@ -758,17 +790,32 @@ void CPU::step(Bus& bus) {
     }
 
     const uint8_t size = instructionSize(op, m_p);
-    m_bytes = formatBytes(size, b0, b1, b2, b3);
-
-    const std::string operand = formatOperand(op.mode, b1, b2, b3, m_pc, m_p);
-
-    if (operand.empty()) {
-        m_instruction = op.name;
-    } else {
-        m_instruction = std::string(op.name) + " " + operand;
-    }
+    m_decodeKind = DecodeKind::Normal;
+    m_decodeB0 = b0;
+    m_decodeB1 = b1;
+    m_decodeB2 = b2;
+    m_decodeB3 = b3;
+    m_decodeSize = size;
+    m_decodeMode = op.mode;
+    m_decodeOpName = op.name;
+    m_decodePc = m_pc;
+    m_decodeP = m_p;
 
     bool pcHandled = false;
+
+    // See Bus::prelatchNmiIfPending's doc comment: predict this instruction's own upcoming
+    // "regular" cycle cost and let the bus know now, before running the instruction's body, so
+    // a register read inside that body (e.g. a $4210 poll) can observe a VBlank/NMI edge that
+    // this same instruction's own cost is about to cross, instead of only ever seeing state as
+    // of before this instruction started.
+    {
+        const unsigned earlyExtraCycle = operandExtraCycle(op, m_opcode, m_p);
+        const uint64_t earlyBaseCycles = cpuOpcodesTable[m_opcode].cyclesNumber + earlyExtraCycle;
+        const unsigned earlyFetchSpeed = bus.accessSpeedCycles(fetchBank, fetchPc);
+        const uint64_t projectedCycles = m_cycles +
+            ((earlyFetchSpeed == 8) ? earlyBaseCycles : (earlyBaseCycles * earlyFetchSpeed + 4) / 8);
+        bus.prelatchNmiIfPending(projectedCycles);
+    }
 
     switch (m_opcode) {
         case 0x00: { // BRK
@@ -2788,8 +2835,10 @@ void CPU::step(Bus& bus) {
         }
         
         case 0x6C: { // JMP (abs)
+            // Indirect jump pointer is always fetched from bank 0, regardless
+            // of the current program bank (65816 spec, inherited from 6502).
             const uint16_t ptr = read16le(b1, b2);
-            const uint16_t addr = busRead16(bus, m_bank, ptr);
+            const uint16_t addr = busRead16(bus, 0x00, ptr);
             m_pc = addr;
             pcHandled = true;
             break;
@@ -2805,8 +2854,9 @@ void CPU::step(Bus& bus) {
         }
 
         case 0xDC: { // JMP [abs] (Indirect Long)
+            // Same bank-0-only pointer fetch as 0x6C above (0x7C is the exception).
             const uint16_t ptr = read16le(b1, b2);
-            const uint32_t target = busRead24(bus, m_bank, ptr);
+            const uint32_t target = busRead24(bus, 0x00, ptr);
         
             m_pc   = static_cast<uint16_t>(target & 0xFFFF);
             m_bank = static_cast<uint8_t>((target >> 16) & 0xFF);
@@ -3419,8 +3469,32 @@ uint8_t CPU::bank() const { return m_bank; }
 uint16_t CPU::pc() const { return m_pc; }
 uint32_t CPU::pc24() const { return (static_cast<uint32_t>(m_bank) << 16) | m_pc; }
 uint8_t CPU::opcode() const { return m_opcode; }
-const std::string& CPU::instruction() const { return m_instruction; }
-const std::string& CPU::bytes() const { return m_bytes; }
+std::string CPU::instruction() const {
+    switch (m_decodeKind) {
+        case DecodeKind::Reset:
+            return "RESET";
+        case DecodeKind::Invalid:
+            return "DB " + hex8(m_decodeB0);
+        case DecodeKind::Normal: {
+            const std::string operand =
+                formatOperand(m_decodeMode, m_decodeB1, m_decodeB2, m_decodeB3, m_decodePc, m_decodeP);
+            return operand.empty() ? std::string(m_decodeOpName) : std::string(m_decodeOpName) + " " + operand;
+        }
+    }
+    return "???";
+}
+
+std::string CPU::bytes() const {
+    switch (m_decodeKind) {
+        case DecodeKind::Reset:
+            return "";
+        case DecodeKind::Invalid:
+            return raw8(m_decodeB0);
+        case DecodeKind::Normal:
+            return formatBytes(m_decodeSize, m_decodeB0, m_decodeB1, m_decodeB2, m_decodeB3);
+    }
+    return "";
+}
 uint8_t CPU::p() const { return m_p; }
 bool CPU::flagM() const { return (m_p & FLAG_M) != 0; }
 bool CPU::flagX() const { return (m_p & FLAG_X) != 0; }

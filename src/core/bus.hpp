@@ -35,6 +35,31 @@ public:
     // Returns true when VBlank starts and NMI should be delivered
     bool stepPeripherals(uint64_t totalCycles, uint64_t totalFineCycles);
 
+    // Real hardware updates the readable $4210 bit continuously as master clocks tick, so a
+    // register read late in a multi-cycle instruction can observe a VBlank edge that occurred
+    // *during* that same instruction's own execution — before the interrupt itself is actually
+    // dispatched, which only happens at the next instruction boundary. This emulator only
+    // advances PPU/scanline state once per whole instruction (via stepPeripherals, called after
+    // the instruction fully completes), so a poll loop's own read could never see a flag flip
+    // caused by its own instruction's cost — the interrupt (if enabled) always got there first,
+    // making any polling loop that races an enabled NMI deadlock forever (confirmed against
+    // Sonic Blast Man II's boot: a $4210 poll lost this race on 100% of ~900K attempts across
+    // 100+ frames while the real NMI handler won every single time). Call this right after
+    // computing an instruction's own upcoming cost but *before* running its body: if that cost
+    // would cross into VBlank and NMI is enabled, pre-arm the flag/pending-dispatch now so the
+    // instruction's own read sees it. Does NOT touch m_vCounter/rendering/HDMA — the real,
+    // once-per-instruction stepPeripherals() call still does all of that at its usual point;
+    // this only lets the *readable* bit and pending-NMI signal become visible slightly earlier,
+    // matching real hardware's finer update granularity without changing scanline/render timing.
+    void prelatchNmiIfPending(uint64_t projectedTotalCycles);
+
+    // Persists whichever of stepPeripherals()/prelatchNmiIfPending() most recently detected a
+    // VBlank-with-NMI-enabled edge, so the caller can dispatch the interrupt once after the
+    // instruction that (possibly early-)observed it fully completes — preserving "NMI is only
+    // ever serviced between whole instructions" even though the readable bit can now flip mid-
+    // instruction. Consumed (reset to false) on read.
+    bool takePendingNmi() { return std::exchange(m_nmiPendingDispatch, false); }
+
     // Real hardware auto-latches the joypad registers ($4218-$421B) every VBlank regardless of
     // whether NMI itself is enabled ($4200 bit7) — they're independent bits. stepPeripherals's
     // own return value stays gated by NMI-enable (needed for its early-return/H-IRQ interaction
@@ -43,6 +68,18 @@ public:
     // (documented elsewhere in this codebase for GSU titles' H/V-counter and SFR.GO polling)
     // never gets fresh joypad state during that stretch, making input feel completely dead.
     bool consumeVblankLatch() { return std::exchange(m_vblankLatchPending, false); }
+
+    // Set at the exact same VBlank edge as m_vblankLatchPending above, but consumed
+    // independently by the presentation loop: it's the signal that the framebuffer now holds
+    // a fully-rendered frame (every visible scanline drawn, none of the next frame's yet) and
+    // is safe to copy/present. Gating frame capture on a raw elapsed-cycle threshold instead
+    // (checked only between whole CPU instructions) let a single cycle-expensive instruction —
+    // chiefly a large GP-DMA transfer, whose stolen cycles are folded into that one instruction's
+    // reported cost — overshoot past the VBlank edge and into the next frame's active scanlines
+    // before the loop noticed and captured, tearing the copied framebuffer (old frame on top,
+    // new frame's already-rendered top rows below). Checking this flag after every instruction
+    // instead catches the edge itself, not some later point downstream of it.
+    bool consumeFrameReady() { return std::exchange(m_frameReadyPending, false); }
 
     // After stepPeripherals + optional triggerNmi/triggerIrq, call once per CPU step.
     // Wakes WAI on VBlank edges when NMITIMEN masks NMI (65C816 libs use WAI in WaitForVBlank).
@@ -91,6 +128,17 @@ public:
     const std::vector<uint8_t>& gsuWorkRam() const { return m_gsuRam; }
 
 private:
+    // Mapped-address decode, factored out of read() so the public entry point can latch every
+    // transferred byte (mapped or not) into m_openBus before returning it — see read()'s comment.
+    uint8_t readMapped(uint8_t bank, uint16_t addr) const;
+
+    // Real hardware has no pull-down on unmapped bus regions: a read there returns whatever byte
+    // was last driven onto the data bus by the previous transfer (mapped read, unmapped read, or
+    // write), not a clean 0x00. Tracking that last-driven byte here and returning it from
+    // readMapped()'s unmapped fallthrough reproduces that "open bus" garbage instead of the
+    // stricter-than-hardware 0x00 this emulator returned before.
+    mutable uint8_t m_openBus = 0;
+
     const std::vector<uint8_t>& m_rom;
 
     // 128 KB WRAM
@@ -106,8 +154,10 @@ private:
 
     bool m_nmiEnabled = false;
     mutable bool m_nmiFlag = false;
+    bool m_nmiPendingDispatch = false;
     bool             m_vblankWaiPending = false;
     bool             m_vblankLatchPending = false;
+    bool             m_frameReadyPending = false;
 
     // V/H counters (start at last line so first emulated scan step wraps 261→0 like post-reset HW)
     uint16_t m_hCounter   = 0;

@@ -11,12 +11,18 @@ set -e
 # official "mingw devel" tarball from SDL's GitHub releases the first time it runs
 # and caches it under .cache/SDL2-mingw/ (gitignored).
 #
-# Windows has no NSOpenPanel/Cocoa menu bar equivalent to src/macOS/native_file_dialog.mm,
-# so this links src/windows/native_file_dialog.cpp instead (native GetOpenFileName dialog,
-# no-op menu-bar hooks) against the same shared native_file_dialog.hpp interface.
+# src/windows/*.cpp mirrors src/macOS/*.mm's native (non-SDL) bare-mode window/input/rendering
+# path (see release-emu-binary-windows.sh for the fuller comment) — this kiosk binary always
+# runs in bare mode, so it goes through that same native path.
 
-ROM_NAME="Transparency"
-ROM_SRC="roms/$ROM_NAME.sfc"
+if [ -z "$1" ]; then
+  echo "Erreur: ROM_SRC requis en paramètre." >&2
+  echo "Usage: $0 <ROM_SRC>" >&2
+  exit 1
+fi
+
+ROM_SRC="$1"
+ROM_NAME="$(basename "$ROM_SRC" .sfc)"
 GEN_HEADER="src/game/embedded_rom.generated.hpp"
 
 MINGW_TRIPLE="x86_64-w64-mingw32"
@@ -27,6 +33,7 @@ if ! command -v "$MINGW_CXX" >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Downloading SDL2 for Windows"
 SDL2_VERSION="2.30.9"
 SDL2_CACHE_DIR=".cache/SDL2-mingw"
 SDL2_TARBALL="SDL2-devel-${SDL2_VERSION}-mingw.tar.gz"
@@ -47,7 +54,8 @@ xxd -i "$ROM_SRC" \
 
 rm -f "$ROM_NAME.exe" SDL2.dll
 
-"$MINGW_CXX" -std=c++20 -O2 -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" \
+echo "Compiling"
+"$MINGW_CXX" -std=c++20 -O2 -DUNICODE -D_UNICODE -DSNESFOX_KIOSK_MODE=1 "-DSNESFOX_APP_NAME=\"$ROM_NAME\"" \
   src/game/main_game.cpp src/core/*.cpp src/windows/*.cpp tests/*.cpp imgui/*.cpp imgui/backends/*.cpp \
   -o "$ROM_NAME.exe" \
   -I. \
@@ -58,9 +66,14 @@ rm -f "$ROM_NAME.exe" SDL2.dll
   -lmingw32 \
   "${SDL2_ROOT}/lib/libSDL2main.a" \
   "${SDL2_ROOT}/lib/libSDL2.dll.a" \
-  -lcomdlg32 \
+  -lcomdlg32 -lwinmm -luser32 -lgdi32 -lshell32 -ldwmapi -ldsound -ldxguid \
+  -ldinput8 -lwbemuuid -lole32 -loleaut32 -luuid -lxinput \
   -static-libgcc -static-libstdc++ -static -lpthread
 
+echo "Removing previous Game directory"
+rm -rf Game
+
+echo "Creating Game directory"
 mkdir -p Game
 
 # SDL2.dll is dynamically loaded at runtime — $ROM_NAME.exe won't start without it next to it.

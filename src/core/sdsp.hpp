@@ -5,6 +5,16 @@
 #include <cstdint>
 #include <vector>
 
+/// Native BRR decode rate (1.024 MHz DSP clock / 32 clocks-per-sample) — the correct sample
+/// rate for a WAV export of [[decodeBrrSampleForExport]]'s raw output.
+constexpr int kBrrSampleRateHz = 32000;
+
+/// Decodes one BRR sample directly out of ARAM for export (debug UI's dir-table "download
+/// sample" button) — independent of any live Voice's playback state. Hardware has no length
+/// field, so this walks 9-byte blocks from `startAddr` until a block's end bit fires, ignoring
+/// the loop bit (a single-shot decode, not the endless loop hardware would actually play).
+std::vector<int16_t> decodeBrrSampleForExport(const std::array<uint8_t, 65536>& aram, uint16_t startAddr);
+
 /// Sony SNES S-DSP: 128-byte register file and IO as seen via SPC `$F2`/`$F3`.
 /// PCM generation (BRR, Gaussian mix, …) can be layered on top of [[runClocks]] later.
 class Sdsp {
@@ -67,11 +77,16 @@ public:
         bool active = false;
         uint16_t brrAddr = 0;
         uint16_t loopAddr = 0;
+        uint16_t pitch = 0; // 14-bit pitch register (VxPITCHL/H); ~32000/1024*pitch Hz for sample playback rate
+        int8_t voll = 0;
+        int8_t volr = 0;
     };
-    [[nodiscard]] VoiceDebugState voiceDebugState(int voice) const {
-        const Voice& v = m_voices[static_cast<size_t>(voice)];
-        return VoiceDebugState{v.active, v.brrAddr, v.loopAddr};
-    }
+    [[nodiscard]] VoiceDebugState voiceDebugState(int voice) const;
+
+    /// Debug aid: when >= 0, only that voice contributes to the mixed output (every voice
+    /// still decodes/advances/envelopes normally — only the final mix contribution is
+    /// muted for the others). -1 (default) mixes all voices normally.
+    void setSoloVoice(int voice) { m_soloVoice = voice; }
 
 private:
     enum class EnvPhase : uint8_t { Attack, Decay, Sustain, Release };
@@ -87,6 +102,10 @@ private:
         int16_t prev2 = 0;
         int16_t prevBlockLast = 0; // last decoded sample of the block before this one (for interpolation lookback)
         std::array<int16_t, 16> decoded{};
+        // First 2 samples of whichever block follows this one, decoded eagerly (continuing
+        // the same running filter state) so interpolation near the block's tail has real
+        // history instead of repeating the last sample — see decodeBlock()'s doc comment.
+        std::array<int16_t, 2> nextPreview{};
 
         // ADSR/GAIN envelope state.
         EnvPhase envPhase = EnvPhase::Release;
@@ -110,6 +129,7 @@ private:
     void decodeBlock(size_t voiceIndex, const std::array<uint8_t, 65536>& aram);
     void advanceVoice(size_t voiceIndex, const std::array<uint8_t, 65536>& aram);
     void updateEnvelope(size_t voiceIndex);
+    void updateNoise();
     void mixOneSample(std::array<uint8_t, 65536>& aram);
     void runEcho(std::array<uint8_t, 65536>& aram, int dryEchoL, int dryEchoR);
 
@@ -121,6 +141,12 @@ private:
     int                             m_clockRemainder{};
     uint8_t                         m_pendingKon{};
     uint8_t                         m_pendingKoff{};
+
+    // Shared 15-bit noise LFSR (register NON selects it per-voice in place of the BRR
+    // sample) plus its own rate counter, reusing the same period table as the envelope.
+    uint16_t                        m_noiseLfsr{0x4000};
+    int                             m_noiseCounter{};
+    int                             m_soloVoice{-1};
 
     // Echo: 8-tap FIR over a small per-channel history ring, plus a delay buffer
     // living in ARAM (ESA/EDL) with feedback (EFB).

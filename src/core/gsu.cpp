@@ -152,8 +152,6 @@ void GSU::mainStep(GsuHost& host) {
         entry.opcode = opcode;
         entry.alt1 = m_alt1;
         entry.alt2 = m_alt2;
-        entry.operand1 = host.readRom((static_cast<uint32_t>(pbrBefore) << 16) | pcBefore);
-        entry.operand2 = host.readRom((static_cast<uint32_t>(pbrBefore) << 16) | static_cast<uint16_t>(pcBefore + 1));
         m_debugLog[m_debugLogPos] = entry;
         m_debugLogPos = (m_debugLogPos + 1) % kDebugLogSize;
         if (m_debugLogCount < kDebugLogSize) ++m_debugLogCount;
