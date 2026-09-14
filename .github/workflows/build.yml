@@ -1,0 +1,19 @@
+name: SnesFox CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: install SDL2
+      run: brew install sdl2
+    - name: release-emu-binary
+      run: ./release-emu-binary.sh
