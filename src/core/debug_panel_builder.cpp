@@ -161,6 +161,7 @@ DebugPanel makeDebugPanel(
         {
             std::ostringstream oss;
             oss << "VWr:" << std::dec << ppu.vramWrites() << " FB:" << (ppu.forcedBlank() ? "ON" : "off")
+                << " Bright:" << static_cast<int>(ppu.brightness())
                 << " M:" << static_cast<int>(ppu.bgMode()) << " TM:" << std::uppercase << std::hex
                 << std::setw(2) << std::setfill('0') << static_cast<int>(ppu.tm());
             ppuSection.lines.push_back(oss.str());
