@@ -225,6 +225,7 @@ private:
         uint32_t rgb = 0xFF000000u; // ARGB, pre-$2100 luma — rgb may be backdrop
         uint8_t  winCmBit = 0x20;   // SNES CGADSUB: backdrop enables bit 5 ("B")
         uint8_t  winIdx = 0;        // CGRAM entry; sprites mapped to 128+…
+        bool     opaque = false;    // true iff a real BG/OBJ pixel won (not the backdrop fallback)
     };
 
     CompositeSample compositeSample(int x,

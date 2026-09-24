@@ -1098,6 +1098,7 @@ auto Ppu::compositeSample(int x,
     CompositeSample sample{};
     sample.winCmBit = winCmBit;
     sample.winIdx   = winIdx;
+    sample.opaque   = found;
     sample.rgb      = cgramToArgb(m_cgram[winIdx]);
 
     // Mode 7 direct colour bypasses CGRAM indexing for affine BG tiles when $2130 bit0 set.
@@ -1135,16 +1136,13 @@ uint32_t Ppu::finalizePixelRgb(int x, const CompositeSample& main,
     uint32_t subB;
 
     const bool subFromScreen = (m_cgswsel & 0x02u) != 0;
+    const bool subScreenEmpty = subFromScreen && !(subSampleMaybe && subSampleMaybe->opaque);
     if (forceSubTransparentFromColorWindow(x)) {
         subR = subG = subB = 0;
-    } else if (subFromScreen) {
-        if (!subSampleMaybe) {
-            subR = subG = subB = 0;
-        } else {
-            subR = (subSampleMaybe->rgb >> 16) & 0xFF;
-            subG = (subSampleMaybe->rgb >> 8) & 0xFF;
-            subB = subSampleMaybe->rgb & 0xFF;
-        }
+    } else if (subFromScreen && subSampleMaybe && subSampleMaybe->opaque) {
+        subR = (subSampleMaybe->rgb >> 16) & 0xFF;
+        subG = (subSampleMaybe->rgb >> 8) & 0xFF;
+        subB = subSampleMaybe->rgb & 0xFF;
     } else {
         subR = static_cast<uint32_t>(m_fixedR) << 3;
         subG = static_cast<uint32_t>(m_fixedG) << 3;
@@ -1152,7 +1150,7 @@ uint32_t Ppu::finalizePixelRgb(int x, const CompositeSample& main,
     }
 
     const bool doSub  = ((m_cgadsub >> 7) & 1) != 0;
-    const bool doHalf = ((m_cgadsub >> 6) & 1) != 0;
+    const bool doHalf = !subScreenEmpty && (((m_cgadsub >> 6) & 1) != 0);
 
     uint32_t mR = (main.rgb >> 16) & 0xFF;
     uint32_t mG = (main.rgb >> 8) & 0xFF;
