@@ -185,6 +185,16 @@ DebugPanel makeDebugPanel(
         }
         {
             std::ostringstream oss;
+            oss << "TS:" << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+                << static_cast<int>(ppu.ts()) << " CGWSEL:" << std::setw(2) << static_cast<int>(ppu.cgswsel())
+                << " CGADSUB:" << std::setw(2) << static_cast<int>(ppu.cgadsub())
+                << " FixedRGB:" << std::setw(2) << static_cast<int>(ppu.fixedColorR())
+                << "," << std::setw(2) << static_cast<int>(ppu.fixedColorG())
+                << "," << std::setw(2) << static_cast<int>(ppu.fixedColorB());
+            ppuSection.lines.push_back(oss.str());
+        }
+        {
+            std::ostringstream oss;
             oss << "CHR@" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << chrBase << ":";
             for (int i = 0; i < 4; ++i)
                 oss << " " << std::setw(4) << vr[(chrBase + i) & 0x7FFF];
