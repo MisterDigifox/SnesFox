@@ -43,11 +43,13 @@ bool parseHex24Line(const std::string& t, uint32_t& out) {
 } // namespace
 
 void printRomInfo(const Rom& rom, const std::vector<uint8_t>& data) {
+    std::cout << "=== Rom Info ===\n";
+    std::cout << "Real File Size : " << rom.fileSize() << " bytes\n";
+    std::cout << "Real ROM Size  : " << rom.size() << " bytes\n";
+    std::cout << "Copier Header  : " << (rom.hasHeader() ? "Yes (512 bytes)" : "No") << "\n";
+    std::cout << "Data Offset    : " << rom.offset() << "\n";
+
     std::cout << "=== Rom Header ===\n";
-    std::cout << "File size      : " << rom.fileSize() << " bytes\n";
-    std::cout << "ROM size       : " << rom.size() << " bytes\n";
-    std::cout << "Copier header  : " << (rom.hasHeader() ? "Yes (512 bytes)" : "No") << "\n";
-    std::cout << "Data offset    : " << rom.offset() << "\n";
     HeaderParser::print(data);
 }
 
