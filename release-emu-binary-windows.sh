@@ -41,6 +41,10 @@ fi
 
 rm -f snesfox.exe SDL2.dll
 
+# -lxinput9_1_0 (not mingw's plain -lxinput, which hard-imports XINPUT1_3.dll — only present
+# via the legacy DirectX End-User Runtime redistributable, not on stock Windows) so the built
+# .exe doesn't fail to even launch with "XINPUT1_3.dll est introuvable" on machines without that
+# redistributable installed; xinput9_1_0.dll has shipped built into Windows since Vista.
 "$MINGW_CXX" -std=c++20 -O2 -DUNICODE -D_UNICODE \
   src/*.cpp src/core/*.cpp src/windows/*.cpp tests/*.cpp imgui/*.cpp imgui/backends/*.cpp \
   -o snesfox.exe \
@@ -53,7 +57,7 @@ rm -f snesfox.exe SDL2.dll
   "${SDL2_ROOT}/lib/libSDL2main.a" \
   "${SDL2_ROOT}/lib/libSDL2.dll.a" \
   -lcomdlg32 -lwinmm -luser32 -lgdi32 -lshell32 -ldwmapi -ldsound -ldxguid \
-  -ldinput8 -lwbemuuid -lole32 -loleaut32 -luuid -lxinput \
+  -ldinput8 -lwbemuuid -lole32 -loleaut32 -luuid -lxinput9_1_0 \
   -static-libgcc -static-libstdc++ -static -lpthread
 
 # SDL2.dll is dynamically loaded at runtime — snesfox.exe won't start without it next to it.
